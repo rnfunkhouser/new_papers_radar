@@ -8,11 +8,11 @@
 # WHERE IS YOUR VM? Set these two once, either as environment variables or by
 # creating a file called ".deploy_env" next to this script (it is git-ignored):
 #
-#     VM=devops@your-vm.nkn.uidaho.edu       # the ssh target rcds@uidaho.edu gave you
+#     VM=devops@your-vm.nkn.uidaho.edu       # the ssh target RCDS gave you
 #     DEST=/home/devops/paper-radar          # a folder on the VM to hold the app
 #
 # (See SETUP_GUIDE.md — the VM, its hostname, and your ssh access all come from a
-#  request to Research Computing & Data Services, rcds@uidaho.edu.)
+#  request to Research Computing & Data Services, RCDS.)
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
@@ -28,7 +28,7 @@ if [[ -z "$VM" ]]; then
   echo "ERROR: VM is not set. Put your VM's ssh target in .deploy_env, e.g.:" >&2
   echo '   VM=devops@your-vm.nkn.uidaho.edu' >&2
   echo '   DEST=/home/devops/paper-radar' >&2
-  echo "(Ask rcds@uidaho.edu for a VM and ssh access first — see SETUP_GUIDE.md.)" >&2
+  echo "(Ask RCDS for a VM and ssh access first — see SETUP_GUIDE.md.)" >&2
   exit 1
 fi
 

@@ -8,122 +8,90 @@ papers across several databases, figures out which ones *you* would actually car
 from a set of papers you already like — and emails you a short, well-written briefing of the best
 few, with a companion web dashboard you can browse and rate.
 
+## 👉 Start here: the [SETUP_GUIDE](SETUP_GUIDE.md)
+
+**[SETUP_GUIDE.md](SETUP_GUIDE.md)** is the step-by-step walkthrough that takes you from zero to
+a working radar — that's the document to have open while you set up. This README explains *how
+the radar thinks*. To see what a morning briefing actually reads like, skim the
+**[sample briefing](sample_briefing_2026-06-29.md)**.
+
 It was originally built for my field as a political-communication researcher, but **nothing about the
 machinery is specific to that field** — it learns your taste from your own seed papers. A
 few field defaults (which journals to trust, which arXiv sections to scan) ship tuned for
 political communication and live in one plain-text file, [`config.toml`](config.toml), for
 you to change to your field or ignore.
 
-> **New here?** Start with **[SETUP_GUIDE.md](SETUP_GUIDE.md)** — a step-by-step,
-> plain-language walkthrough written for faculty, no computer-science background assumed.
-> This README explains *how the radar thinks*; the guide explains *how to stand it up*.
-> To see what a morning briefing actually reads like, skim the
-> **[sample briefing](sample_briefing_2026-06-29.md)**.
-
-This is a **template**. It is designed for University of Idaho faculty: the "smart" AI parts
-run on **MindRouter**, the campus LLM gateway, and the daily job runs on a small **campus
-virtual machine** that you request from Research Computing & Data Services (`rcds@uidaho.edu`).
-The setup guide walks through all of that.
+This is a **template**, designed for University of Idaho faculty: the "smart" AI parts run on
+**MindRouter**, the campus LLM gateway, and the daily job runs on a small **campus virtual
+machine** that you request from Research Computing & Data Services (RCDS — reachable at
+`rcds` at `uidaho` dot `edu`). The setup guide walks through all of that.
 
 ---
 
-## The one-paragraph version
+## How it works
 
-You give it a **seed set** of papers you love (it can pull these straight from a Zotero
-library). It turns those into a numerical "taste profile." Each morning it **gathers** a few
-thousand recent papers from OpenAlex, arXiv, and Semantic Scholar; **filters** out the junk;
-**ranks** what's left by how close each paper sits to your taste; **selects** the top handful
-that clear a quality bar; **writes** each one up in a consistent house style using a campus
-LLM; and **delivers** a PDF by email plus a searchable dashboard. It remembers what it has
-already shown you, and it learns from your 👍/👎 ratings.
-
----
-
-## How it works, stage by stage
-
-### 0. Your taste profile (built once, refreshed when seeds change)
+### 0. Your taste profile
 
 Everything starts from `seeds.txt`, a list of papers you consider "this is my kind of work."
-From the seeds the system builds `seeds_profile.json`, which contains:
+From those the radar builds a profile: the topic concepts it will search, journals to trust
+(any venue holding ≥2 of your seeds), recurring authors to favor, short statements of each
+interest cluster, and a cached numeric "meaning fingerprint" (an *embedding*) of every seed.
+You can also **link your seeds to a Zotero library** to make the list dynamic — add a paper to
+the library and it becomes a seed at the next sync (`python3 harvest.py --sync-zotero`).
 
-- **Concepts** — the OpenAlex topic tags your seeds carry most often. These become the
-  *search terms* used to gather.
-- **Trusted venues** — any journal where ≥2 of your seeds appeared is auto-added to a
-  "quality on sight" list, so the list self-updates as you add seeds.
-- **Seed authors** — authors who recur in your seeds get a small relevance bump.
-- **Interest statements** — short natural-language descriptions of each topic cluster, written
-  by an LLM, used later to re-judge relevance in context (see Rank).
-- **Seed embeddings** — each seed paper is turned into a numeric "meaning fingerprint"
-  (an *embedding*) and cached, so we only ever compute it once.
+### 1. Gather
 
-Big topics get **sub-angles**: if a cluster has many seeds it tends to blur into a generic
-theme, so it's split into 2–3 more specific sub-statements that judge papers on your
-*specific* sub-interests rather than the vague common theme.
+Each morning it pulls a few thousand recent papers: **OpenAlex** results for each of your top
+concepts (paged deep, over a rolling ~2-week window, so papers the databases index late still
+get seen), fresh **arXiv** preprints from your categories, and **Semantic Scholar**'s
+"papers similar to your seeds." Embeddings are cached, so re-scanning a wide window each day
+only pays for what's genuinely new.
 
-### 1. Gather — cast a wide net
+### 2. Filter
 
-For each of your top concepts, the system asks **OpenAlex** for recent papers tagged with
-that concept, newest first. It also pulls recent **arXiv** preprints (from the categories you
-list in `config.toml`) and asks **Semantic Scholar** to "recommend papers similar to my seeds."
+Obvious non-starters are dropped before ranking: non-articles (book front-matter, corrigenda,
+reviews), duplicates, anything you 👎'd, and anything you've already been shown (tracked in a
+ledger, `seen.json`).
 
-The cost of gathering more is kept low by **caching every paper's embedding**, so a wide
-window re-scanned daily only pays to embed the papers that are *genuinely new since yesterday*.
+### 3. Rank
 
-### 2. Filter — throw out what you'd never want
+Two passes. First, each candidate is scored by embedding similarity to your *nearest* seed
+papers, with a penalty for resembling papers you've disliked. Then a reranker model re-judges
+the top candidates against your interest statements in context. That relevance score is
+blended with venue/author quality, citation impact, and recency — all the weights live in
+`config.toml`.
 
-Before spending any effort ranking, obvious non-starters are dropped: non-articles (book
-front-matter, corrigenda, reviews), duplicates (merged, keeping whichever copy has an
-abstract), anything you 👎'd, and anything already shown (a ledger, `seen.json`, records
-everything you've been sent; entries expire after 180 days).
+### 4. Select
 
-### 3. Rank — how close is this to *your* taste?
+The day's slots are filled from the top of the ranking, but only with papers that have real
+content — an abstract or fetchable open-access full text. A strong paper without one is held
+on a watchlist and re-enters the moment its abstract appears (databases often list a paper
+days before adding its abstract).
 
-This is the heart of it, and it works in two passes:
+### 5. Write
 
-1. **Embedding relevance.** Every surviving candidate is compared (cosine similarity) to your
-   *nearest* seed papers. A **contrastive** tweak favors papers that are *specifically* close
-   to a few seeds over ones that are only *generically* close; a **downvote penalty** pushes
-   down papers that resemble things you disliked.
-2. **Cross-encoder rerank.** The top candidates are re-judged by a reranker model that reads
-   each paper *together with* your interest statements and scores contextual fit.
+For each pick, the campus LLM writes a summary — question, method, concrete results, why it
+matters — grounded in the abstract or, when available, the full text, and explicitly
+instructed never to invent methods or numbers. Hallucination is still an inherent LLM risk,
+which is why every entry links to the real article.
 
-The relevance number is combined with **quality** (prestige venues, your trusted journals,
-measured citation impact, a returning-author bump), **recency**, and **gates** (a paper from
-outside your preferred regions, or of a non-article type, must be exceptionally on-topic to
-escape a scoring penalty). All of these weights and thresholds live in `config.toml`.
+### 6. Deliver
 
-### 4. Select — only show papers with real content
-
-Going down the ranked list, the system fills the day's slots — but it will only *show* a paper
-it has real content for: an abstract, or fetchable open-access full text. A strong paper with
-neither is **held on a watchlist** and re-checked daily; the moment its abstract appears, it
-re-enters and competes (since databases often list before an abstract is added, then update 
-with the abstact or full paper later.
-
-### 5. Write — a consistent house style
-
-For each selected paper, the campus LLM (via MindRouter) writes a full-depth summary — the
-question, the method, the concrete results, and why it matters — grounded in the abstract or,
-when available, the actual open-access full text. It is explicitly instructed **never to
-invent** methods or numbers the source doesn't state, though that may still be a risk with 
-LLMs, something that's combatted by giving you the link to the real article.
-
-### 6. Deliver — email + dashboard
-
-A clean, journal-styled **PDF** is built (pure standard library) and **emailed**. A **web
-dashboard** shows the same briefing, lets you search the archive, and lets you rate papers
-👍/👎 — those ratings feed straight back into ranking.
+A journal-styled **PDF** lands in your inbox, and the **web dashboard** shows the same
+briefing plus a searchable archive and 👍/👎 buttons — those ratings feed straight back into
+ranking.
 
 ---
 
 ## Configuration — one file
 
 Almost everything you'd tune lives in **[`config.toml`](config.toml)**: your email, your
-field's journals and arXiv categories, the scoring weights, and the gate thresholds. It is
-heavily commented; the only value you *must* set is your email. See the
+field's journals and arXiv categories, the scoring weights and thresholds. It is heavily
+commented; the only value you *must* set is your email. See the
 [SETUP_GUIDE](SETUP_GUIDE.md) for the three private files that hold secrets
 (`mindrouter.json`, `.briefing_env`, `zotero.json`) — each has a committed `.example`
-template you copy and fill in.
+template you copy and fill in. After changing config or seeds, re-run
+`python3 harvest.py --build-profile`.
 
 ## Files
 
@@ -160,12 +128,6 @@ python3 harvest.py                         # a manual harvest (uses config.toml 
 bash run_daily.sh                          # the whole morning routine
 ./deploy.sh                                # push code to the VM + rebuild the container
 ```
-
-## The knobs worth tuning
-
-All live in [`config.toml`](config.toml), fully commented — `days_window`, `top_n`,
-`openalex_concepts`, `openalex_max_per_concept`, the scoring weights, and the geo/type gate
-thresholds. Change a value, save, and re-run `python3 harvest.py --build-profile`.
 
 ---
 

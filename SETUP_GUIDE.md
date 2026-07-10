@@ -1,9 +1,8 @@
 # Setup Guide — your own Daily Papers Radar
 
 Welcome! This guide takes you from zero to a working research radar that emails you a
-hand-picked, well-written briefing of new papers every morning. It is written for faculty,
-**not** for programmers — every step is spelled out, and technical words are explained the
-first time they appear. If you can copy, paste, and edit a line of text, you can do this.
+hand-picked, well-written briefing of new papers every morning. Every step is spelled out,
+and technical terms are explained the first time they appear.
 
 Take it slowly. You do **not** have to finish in one sitting; there are natural stopping
 points, and one early step (requesting a campus computer) involves a wait, so it's normal to
@@ -51,7 +50,8 @@ lives in a university data center and is always on. You also need a **web addres
 you can open the dashboard in your browser. Both come from the university's **Research
 Computing & Data Services (RCDS)** team.
 
-**Email `rcds@uidaho.edu`** and ask for the following. Here is wording you can adapt:
+**Email RCDS** (their address is `rcds` at `uidaho` dot `edu` — written that way here only to
+dodge email scrapers) and ask for the following. Here is wording you can adapt:
 
 > Subject: Request for a small Linux VM for a daily research tool
 >
@@ -90,7 +90,7 @@ The radar leans on a few free services. Gather these:
 
 1. **A MindRouter API key.** MindRouter is the University of Idaho's AI gateway — it provides
    the "smart" parts (understanding paper meaning, writing the summaries) so nothing runs on
-   your own hardware. Request an API **key** for it; ask **`rcds@uidaho.edu`** how to obtain
+   your own hardware. Request an API **key** for it; ask **RCDS** how to obtain
    one if it isn't obvious. An *API key* is just a long secret password that lets a program
    use a service. You'll paste it into a file later.
 
@@ -358,7 +358,7 @@ you get more or fewer papers than you like, and you dial it back.
 - **A `config.toml` error on startup.** You likely deleted a quote or bracket while editing —
   every `"` and `[` needs its partner. Compare against `config.toml` in a fresh copy.
 - **Still stuck?** The `HANDOFF`-style comments at the top of each script explain what it does,
-  and `rcds@uidaho.edu` can help with anything VM-, SSH-, or network-related.
+  and RCDS can help with anything VM-, SSH-, or network-related.
 
 ---
 
@@ -381,4 +381,5 @@ The VM path avoids all of those caveats, which is why it's the recommended one.
 ---
 
 *Questions about the radar itself can go to whoever shared this template with you. Questions
-about the VM, SSH, MindRouter access, or campus networking go to `rcds@uidaho.edu`.*
+about the VM, SSH, MindRouter access, or campus networking go to RCDS (`rcds` at `uidaho`
+dot `edu`).*

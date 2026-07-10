@@ -25,7 +25,8 @@ template"* to make their own copy.
   paths.
 - **Campus services.** The "smart" work (embeddings, reranking, summary writing) runs on
   **MindRouter** (`mindrouter.uidaho.edu`), the UIdaho AI gateway. The daily job runs on a
-  campus **VM** (requested from `rcds@uidaho.edu`) via Docker; a launchd alternative exists for
+  campus **VM** (requested from RCDS — `rcds` at `uidaho` dot `edu`; keep the address
+  obfuscated in this repo to dodge scrapers) via Docker; a launchd alternative exists for
   an always-on Mac.
 
 ## When making changes
