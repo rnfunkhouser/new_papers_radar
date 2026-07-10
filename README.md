@@ -1,12 +1,17 @@
 # Daily Papers Radar
 
-[note: I very much 'vibe-coded' this project, and while it's working great for me, you may find issues 
-with it or with this (largely) AI generated documentation]
+_[note: I very much 'vibe-coded' this project, and while it's working great for me, you may find issues 
+with it or with this (largely) AI generated documentation]_
 
-This helps you build a personal research radar. Every morning it reads the day's new scholarly 
-papers across several databases, figures out which ones *you* would actually care about — learned 
-from a set of papers you already like — and emails you a short, well-written briefing of the best
-few, with a companion web dashboard you can browse and rate.
+This helps you build a personal research radar. 
+
+I was sick of relying on really imprecise Goolgle Scholar alerts or the luck of seeing a relevant new 
+article get shared by a colleague on social media. I wanted a more rigorous way to ensure I was actually 
+seeing the new pubs in my space. Enter the research radar.
+
+Every morning it reads the day's new scholarly papers across several databases, figures out which ones 
+*you* would actually care about — learned from a set of papers you already like — and emails you a 
+short, well-written briefing of the best few, with a companion web dashboard you can browse and rate.
 
 ## 👉 Start here: the [SETUP_GUIDE](SETUP_GUIDE.md)
 
@@ -18,13 +23,15 @@ the radar thinks*. To see what a morning briefing actually reads like, skim the
 It was originally built for my field as a political-communication researcher, but **nothing about the
 machinery is specific to that field** — it learns your taste from your own seed papers. A
 few field defaults (which journals to trust, which arXiv sections to scan) ship tuned for
-political communication and live in one plain-text file, [`config.toml`](config.toml), for
-you to change to your field or ignore.
+political communication and live in one plain-text file, [`config.toml`](config.toml), but the setup 
+guide walks you through how to make this tuned to you.
 
 This is a **template**, designed for University of Idaho faculty: the "smart" AI parts run on
 **MindRouter**, the campus LLM gateway, and the daily job runs on a small **campus virtual
 machine** that you request from Research Computing & Data Services (RCDS — reachable at
-`rcds` at `uidaho` dot `edu`). The setup guide walks through all of that.
+`rcds` at `uidaho` dot `edu`). The setup guide walks through all of that. Though non-UIdaho faculty
+could likely adapt this with little trouble so long as you have your own local LLM and server 
+hosting.
 
 ---
 
