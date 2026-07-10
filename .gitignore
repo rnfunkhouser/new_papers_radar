@@ -1,0 +1,50 @@
+# === secrets — NEVER commit ===
+mindrouter.json
+.briefing_env
+zotero.json
+.deploy_env
+*.key
+
+# === your personal seed list (the .example template IS committed) ===
+seeds.txt
+
+# === large embedding caches (rebuildable; some >25MB) ===
+# NOTE: keep comments on their OWN line — git treats an inline '#' as part of the pattern.
+doc_embeddings.json
+seeds_embeddings.json
+feedback_embeddings.json
+
+# === derived profile artifacts (regenerate with: harvest.py --build-profile) ===
+seeds_profile.json
+seed_titles.json
+clusters.json
+interests.json
+
+# === mutable runtime ledgers / state ===
+seen.json
+watchlist.json
+feedback.json
+topic_weights.json
+venue_stats.json
+zotero_imported.json
+candidates.json
+
+# === daily outputs & runtime dirs ===
+briefings/
+fulltext/
+logs/
+cards_*.json
+data_*.json
+
+# === diagnostics scratch ===
+diagnose_*.json
+
+# === tooling / python ===
+.claude/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# NOTE: config.toml IS committed — it holds your (non-secret) settings and the
+# working defaults new users start from. Edit it in place to tune the radar.

@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd job: run the paper radar every morning at 05:57 local time.
+  This is the "always-on Mac" alternative to the campus-VM/Docker deployment
+  (which is the recommended path — see SETUP_GUIDE.md). Use this only if you are
+  running the radar on a Mac that is on every morning.
+
+  INSTALL (on that Mac):
+    1. Replace every /PATH/TO/new_papers_radar below with the real, absolute
+       path to this folder on that Mac. (Run `pwd` inside the folder to get it.)
+       There are three placeholders: the script path and two log paths.
+    2. Rename this file to com.<yourname>.papersradar.plist and update the Label
+       string to match.
+    3. cp com.<yourname>.papersradar.plist ~/Library/LaunchAgents/
+    4. launchctl load   ~/Library/LaunchAgents/com.<yourname>.papersradar.plist
+       (to stop it later:  launchctl unload  ~/Library/LaunchAgents/com.<yourname>.papersradar.plist)
+    5. Test it now without waiting for 05:57:
+         launchctl start com.<yourname>.papersradar
+
+  WHY 05:57 and not 06:00: off-minute times avoid everyone hitting the scholarly
+  APIs at the same instant.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.example.papersradar</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/zsh</string>
+        <string>/PATH/TO/new_papers_radar/run_daily.sh</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>5</integer>
+        <key>Minute</key>
+        <integer>57</integer>
+    </dict>
+
+    <!-- If the Mac is asleep at 05:57, launchd runs this once when it next wakes. -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/PATH/TO/new_papers_radar/logs/launchd.out</string>
+    <key>StandardErrorPath</key>
+    <string>/PATH/TO/new_papers_radar/logs/launchd.err</string>
+</dict>
+</plist>

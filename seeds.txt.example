@@ -1,0 +1,25 @@
+# ============================================================================
+#  seeds.txt — YOUR taste, as a list of papers you love.
+# ----------------------------------------------------------------------------
+#  Copy this file to "seeds.txt" (same folder) and replace the examples below
+#  with your own papers. This list IS how the radar learns what to find for you:
+#  it studies these papers and looks for new work that resembles them.
+#
+#  HOW TO FILL IT IN — three easy ways, mix freely:
+#    1. One DOI per line, e.g.   10.1093/poq/nfae012
+#    2. One paste-in citation per line (APA or otherwise) — the radar will look
+#       up its DOI for you.
+#    3. Best of all: connect a Zotero library (see zotero.json.example and the
+#       SETUP_GUIDE) so your seeds stay in sync with a folder you already curate.
+#
+#  Lines starting with "#" are comments and are ignored, so you can annotate.
+#  Aim for at least ~15-20 papers to start; more is better. Add or remove any
+#  time, then re-run:  python3 harvest.py --build-profile
+#
+#  The example DOIs below are real papers — DELETE them and add your own.
+# ============================================================================
+
+10.1093/poq/nfad063
+10.1177/00936502231176435
+10.1080/10584609.2023.2277956
+10.1038/s41562-023-01587-9

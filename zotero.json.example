@@ -1,0 +1,15 @@
+{
+  "_comment": "Config for `python3 harvest.py --sync-zotero`. Copy to zotero.json.",
+  "library_type": "group",
+  "library_id": "0000000",
+  "collection_key": "",
+  "api_key": ""
+}
+```
+Fields:
+  library_type   "group" (a Zotero group) or "user" (your personal library).
+  library_id     The numeric ID. For a group it's in the URL: zotero.org/groups/<ID>.
+  collection_key Optional. A sub-collection key to sync only that folder; "" = whole library.
+  api_key        Leave "" for a PUBLIC group (Library Reading = Anyone). For a private
+                 library, create a read-only key at zotero.org/settings/keys and paste it.
+```

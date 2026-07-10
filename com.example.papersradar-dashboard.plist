@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Always-on LOCAL dashboard for the paper radar, at http://localhost:8765.
+  Localhost-only; nothing is exposed to the network. Use this only with the
+  "always-on Mac" setup (the VM/Docker deployment serves its own dashboard).
+
+  INSTALL:
+    1. Replace every /PATH/TO/new_papers_radar below with this folder's real
+       absolute path on that Mac (there are three).
+    2. Rename to com.<yourname>.papersradar-dashboard.plist and update the Label.
+    3. cp com.<yourname>.papersradar-dashboard.plist ~/Library/LaunchAgents/
+    4. launchctl load ~/Library/LaunchAgents/com.<yourname>.papersradar-dashboard.plist
+  STOP:
+    launchctl unload ~/Library/LaunchAgents/com.<yourname>.papersradar-dashboard.plist
+
+  KeepAlive restarts it if it crashes and starts it at login.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.example.papersradar-dashboard</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/zsh</string>
+        <string>-lc</string>
+        <string>cd '/PATH/TO/new_papers_radar' &amp;&amp; exec python3 dashboard.py</string>
+    </array>
+
+    <key>KeepAlive</key>
+    <true/>
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/PATH/TO/new_papers_radar/logs/dashboard.out</string>
+    <key>StandardErrorPath</key>
+    <string>/PATH/TO/new_papers_radar/logs/dashboard.err</string>
+</dict>
+</plist>

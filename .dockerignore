@@ -1,0 +1,4 @@
+# The image only COPYs entrypoint.sh; keep the rest out of the build context for speed.
+# (Code + state are bind-mounted at runtime, not baked in.)
+*
+!entrypoint.sh

@@ -1,0 +1,6 @@
+{
+  "_comment": "Copy to mindrouter.json and `chmod 600 mindrouter.json`, then paste your key. Used for embedding-based relevance via MindRouter (UIdaho campus LLM gateway). Called with stdlib urllib — no pip packages needed.",
+  "base_url": "https://mindrouter.uidaho.edu/v1",
+  "api_key": "",
+  "embedding_model": "Qwen/Qwen3-Embedding-8B"
+}

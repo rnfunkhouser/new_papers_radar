@@ -1,0 +1,135 @@
+# ============================================================================
+#  Daily Papers Radar — your settings
+# ----------------------------------------------------------------------------
+#  This is the one file that makes the radar YOURS. It is plain text: lines that
+#  start with "#" are notes to you and are ignored by the program. To change a
+#  setting, edit the value to the right of the "=" and save the file.
+#
+#  The ONLY thing you truly must change is `mailto` in the [contact] section
+#  just below. Everything else already has a sensible default — the radar mostly
+#  learns your taste from your seed papers (see the SETUP_GUIDE), so you can
+#  leave the rest alone until you feel like tuning it.
+#
+#  After editing this file, rebuild your profile so changes take effect:
+#      python3 harvest.py --build-profile
+# ============================================================================
+
+
+[contact]
+# Your email address. It is sent to the free scholarly databases (OpenAlex,
+# Crossref, Unpaywall) as a courtesy "who is calling" identifier — this is their
+# published etiquette and it makes their service faster and more reliable for
+# you. It is NOT published anywhere and is NOT used to email you (that is set
+# separately, in the .briefing_env file). CHANGE THIS to your address.
+mailto = "you@uidaho.edu"
+
+
+[briefing]
+# One sentence describing whose interests the daily write-ups are for. The
+# writing model is told this so summaries are pitched at the right reader. Keep
+# it short and specific to your field. Example for a different field:
+#   "a public-health researcher (interests: vaccine uptake, health messaging,
+#    behavior change, health equity)".
+audience = "a political-communication scholar (interests: persuasion, narrative, deliberation, misinformation, AI/LLM persuasion)"
+
+
+[field]
+# ----------------------------------------------------------------------------
+#  Field defaults. These ship tuned for political communication. They are a
+#  STARTING POINT — the radar also learns from your seeds — so you can edit them
+#  to your field, or ignore them at first and revisit later.
+# ----------------------------------------------------------------------------
+
+# arXiv preprint categories to scan each morning. Browse the full list of codes
+# at https://arxiv.org/category_taxonomy . A few examples:
+#   cs.CL = computation & language     cs.CY = computers & society
+#   cs.SI = social & information nets   econ.GN = general economics
+#   q-bio.NC = neurons & cognition      stat.AP = applied statistics
+# If your field is not on arXiv at all, you can set this to an empty list:  []
+arxiv_categories = ["cs.CY", "cs.SI", "cs.CL"]
+
+# Journals you trust ON SIGHT. A paper appearing in one of these gets a quality
+# boost. You do NOT have to curate this by hand: any journal where 2 or more of
+# your seed papers have appeared is added here AUTOMATICALLY when you build your
+# profile, so this list grows itself as your seeds grow. What you list here is
+# just the extra single-appearance journals you want trusted from day one.
+# Use lowercase journal names, exactly as they appear (drop a leading "the ").
+trusted_venues = [
+    "human communication research", "journal of deliberative democracy",
+    "journal of personality and social psychology", "journal of communication",
+    "text and talk", "narrative inquiry", "communication monographs",
+    "political communication", "science", "communication research", "communication theory",
+    "american journal of political science", "proceedings of the national academy of sciences",
+    "journal of experimental social psychology", "journal of social psychology",
+    "discourse & society", "discourse studies", "frontiers in political science",
+    "metaphor and symbol", "current opinion in psychology", "scientific reports",
+    "computers in human behavior reports", "social media + society", "health communication",
+    "pnas nexus", "social science computer review", "peace and conflict studies",
+]
+
+# Top-tier journals whose reputation alone should surface a strongly on-topic
+# paper even if it is not in your personal list above. Matched by name or by
+# name-prefix (so "nature" also catches "nature human behaviour", etc.). The
+# general-science entries (Nature, Science, PNAS...) apply to every field; the
+# rest are political-communication picks you can swap for your field's flagships.
+prestige_venues = [
+    "nature", "science", "proceedings of the national academy of sciences", "pnas",
+    "nature human behaviour", "nature communications", "nature climate change",
+    "science advances", "psychological science", "american political science review",
+    "public opinion quarterly", "new media & society",
+    "journal of computer-mediated communication", "political behavior",
+]
+
+# Author-affiliation countries you prefer, as ISO two-letter codes (US, GB, DE,
+# CA, AU...). A paper whose authors are ENTIRELY outside this set must be an
+# exceptional topical match to surface — this keeps the long tail manageable.
+# To turn geographic preference OFF completely, set this to an empty list:  []
+preferred_countries = [
+    "US", "CA", "GB", "IE", "AU", "NZ",
+    "DE", "FR", "NL", "BE", "CH", "AT", "SE", "NO", "DK", "FI", "IT", "ES", "PT",
+]
+
+
+[harvest]
+# ----------------------------------------------------------------------------
+#  How wide a net to cast each morning. Bigger numbers = more thorough but
+#  slower. The defaults are well-tested; most people never change these.
+# ----------------------------------------------------------------------------
+days_window            = 14   # how many days back to look (the no-repeat ledger
+                              # means a wider window never shows you the same paper twice)
+top_n                  = 5    # how many papers to surface per briefing
+openalex_concepts      = 22   # how many of your topic areas to search each run
+openalex_per_page      = 200  # papers per page from OpenAlex (200 is their maximum)
+openalex_max_per_concept = 800 # how deep to page per topic (higher = catches papers
+                              # indexed a few days late, at some extra time cost)
+arxiv_max              = 120  # how many recent arXiv preprints to scan
+
+
+[scoring]
+# ----------------------------------------------------------------------------
+#  How a paper's final score is composed, and how harshly the "long tail" is
+#  filtered. Advanced — safe to leave alone. The three weights should sum to 1.
+# ----------------------------------------------------------------------------
+weight_relevance = 0.50   # topical closeness to your seed papers
+weight_quality   = 0.35   # venue prestige / trusted journals / citation impact
+weight_recency   = 0.15   # newer is better
+
+rel_norm            = 3.0   # tag-relevance reaches 1.0 at ~3 strong concept matches
+proceedings_penalty = 0.75  # score multiplier for conference/proceedings papers
+
+# "Gates": a paper from outside your preferred countries, or of a non-journal
+# type, is penalized UNLESS its topical relevance clears the bar below.
+geo_gate_rel      = 0.90   # relevance a non-preferred-country paper needs to escape the gate
+geo_gate_penalty  = 0.55   # score multiplier when it does not
+type_gate_rel     = 0.85   # relevance a non-journal item needs to escape the gate
+type_gate_penalty = 0.40   # score multiplier when it does not
+
+
+[rerank]
+# ----------------------------------------------------------------------------
+#  The second-pass "read it in context" reranker. Advanced — leave as-is.
+# ----------------------------------------------------------------------------
+n_clusters          = 10    # how many topic areas to group your seeds into
+subdivide_threshold = 13    # a topic bigger than this is split into 2-3 sub-angles
+rerank_top          = 200   # how many top candidates the reranker re-reads
+rerank_blend        = 0.6   # how much the reranker counts vs. the embedding score
