@@ -1,11 +1,14 @@
 # Daily Papers Radar
 
-A personal research radar. Every morning it reads the day's new scholarly papers across
-several databases, figures out which ones *you* would actually care about — learned from a
-set of papers you already like — and emails you a short, well-written briefing of the best
+[note: I very much 'vibe-coded' this project, and while it's working great for me, you may find issues 
+with it or with this (largely) AI generated documentation]
+
+This helps you build a personal research radar. Every morning it reads the day's new scholarly 
+papers across several databases, figures out which ones *you* would actually care about — learned 
+from a set of papers you already like — and emails you a short, well-written briefing of the best
 few, with a companion web dashboard you can browse and rate.
 
-It was originally built for a political-communication researcher, but **nothing about the
+It was originally built for my field as a political-communication researcher, but **nothing about the
 machinery is specific to that field** — it learns your taste from your own seed papers. A
 few field defaults (which journals to trust, which arXiv sections to scan) ship tuned for
 political communication and live in one plain-text file, [`config.toml`](config.toml), for
@@ -38,9 +41,6 @@ already shown you, and it learns from your 👍/👎 ratings.
 
 ## How it works, stage by stage
 
-Think of it as an assembly line with six stations. The two that matter most — and that took
-the most tuning — are **Gather** and **Rank**.
-
 ### 0. Your taste profile (built once, refreshed when seeds change)
 
 Everything starts from `seeds.txt`, a list of papers you consider "this is my kind of work."
@@ -60,21 +60,11 @@ Big topics get **sub-angles**: if a cluster has many seeds it tends to blur into
 theme, so it's split into 2–3 more specific sub-statements that judge papers on your
 *specific* sub-interests rather than the vague common theme.
 
-### 1. Gather — cast a wide, smart net
+### 1. Gather — cast a wide net
 
 For each of your top concepts, the system asks **OpenAlex** for recent papers tagged with
 that concept, newest first. It also pulls recent **arXiv** preprints (from the categories you
 list in `config.toml`) and asks **Semantic Scholar** to "recommend papers similar to my seeds."
-
-Two design choices here fix a subtle but important failure:
-
-- **Deep paging, not just the newest slice.** A big concept can get hundreds of new papers
-  *per day*. If we only took the newest slice, a genuinely relevant paper could be pushed off
-  the bottom of that list and **never even be looked at**. Worse, OpenAlex often **indexes a
-  paper several days after its official publication date**. We now page deep per concept
-  (`openalex_max_per_concept`), so those papers are actually gathered.
-- **A ~14-day window, re-scanned daily.** We look back two weeks so a paper that shows up late
-  still lands inside the window. The "already shown" ledger means this never produces repeats.
 
 The cost of gathering more is kept low by **caching every paper's embedding**, so a wide
 window re-scanned daily only pays to embed the papers that are *genuinely new since yesterday*.
@@ -107,14 +97,16 @@ escape a scoring penalty). All of these weights and thresholds live in `config.t
 Going down the ranked list, the system fills the day's slots — but it will only *show* a paper
 it has real content for: an abstract, or fetchable open-access full text. A strong paper with
 neither is **held on a watchlist** and re-checked daily; the moment its abstract appears, it
-re-enters and competes.
+re-enters and competes (since databases often list before an abstract is added, then update 
+with the abstact or full paper later.
 
 ### 5. Write — a consistent house style
 
 For each selected paper, the campus LLM (via MindRouter) writes a full-depth summary — the
 question, the method, the concrete results, and why it matters — grounded in the abstract or,
 when available, the actual open-access full text. It is explicitly instructed **never to
-invent** methods or numbers the source doesn't state.
+invent** methods or numbers the source doesn't state, though that may still be a risk with 
+LLMs, something that's combatted by giving you the link to the real article.
 
 ### 6. Deliver — email + dashboard
 
