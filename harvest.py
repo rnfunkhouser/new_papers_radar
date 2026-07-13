@@ -104,14 +104,15 @@ OPENALEX_CONCEPTS = config.OPENALEX_CONCEPTS      # concepts queried per run —
                             # cluster (10) plus a dozen filled by global weight (was 14)
 OPENALEX_PER_PAGE = config.OPENALEX_PER_PAGE     # papers per page; OpenAlex free-tier maximum (was 150)
 OPENALEX_MAX_PER_CONCEPT = config.OPENALEX_MAX_PER_CONCEPT   # page THIS deep per concept (via cursor), not just one page.
-                            # A big concept like "Politics" gets ~280 NEW papers/day, served
+                            # Broad concepts hold thousands of papers in a 14-day window
+                            # ("Narrative" ~5k, "Social media" ~2.7k when measured), served
                             # newest-first. A relevant paper whose publication_date sits at the
                             # OLD edge of the window — common, because OpenAlex often indexes a
                             # paper several days AFTER its print date — lands far down that list
-                            # and was silently truncated by the old single-page 150 cap. Paging
-                            # deeper is the free fix for that GATHERING-stage recall gap; the
-                            # extra embedding cost is bounded by the doc_embeddings cache (each
-                            # paper is embedded exactly once, ever).
+                            # and is silently truncated by a shallow cap (was 150, then 800).
+                            # 3500 covers the whole window for all but the very largest
+                            # concepts; the extra embedding cost is bounded by the
+                            # doc_embeddings cache (each paper is embedded exactly once, ever).
 ARXIV_MAX = config.ARXIV_MAX             # arXiv preprints to scan (was 40)
 
 # Conference proceedings are nudged below full journal articles: a genuinely strong
@@ -357,8 +358,9 @@ def build_clusters(cache, seed_titles):
 
 # ----------------------------------------------------------------------------
 # Interest statements — the "why" behind each topic cluster. An LLM reads each
-# cluster's seed papers and writes the specific angle that unites them (e.g. not
-# "narrative" but "narrative as a mechanism of persuasion and bridging divides").
+# cluster's seed papers and writes 2-3 sentences on the specific angle that unites
+# them (e.g. not "narrative" but "narrative as a mechanism of persuasion and
+# bridging divides", plus the recurring methods/contexts).
 # Auto-regenerated whenever the profile rebuilds, so nothing is hardcoded and the
 # statements evolve with your seeds. Used two ways: as the reranker's queries, and
 # stored with embeddings in interests.json.
@@ -367,20 +369,24 @@ def build_clusters(cache, seed_titles):
 INTERESTS = HERE / "interests.json"
 
 def _interest_sentence(seed_texts, member_dois):
-    """One-sentence interest statement distilled from a set of seed papers, or None on
-    failure/empty. Shared by the whole-cluster (umbrella) and per-sub-angle calls."""
+    """Short (2-3 sentence) interest statement distilled from a set of seed papers, or None
+    on failure/empty. Shared by the whole-cluster (umbrella) and per-sub-angle calls. These
+    become the reranker's queries, so richer statements carry more of the seeds' specificity
+    into the second-pass relevance judgment."""
     import embeddings
     snippets = ["- " + (seed_texts.get(d, "") or "")[:300] for d in member_dois[:15]]
     try:
         stmt = embeddings.chat(
             "You distill a researcher's specific interest from papers they chose to save. "
-            "Answer with ONE sentence (no preamble) describing the precise research interest "
-            "that unites these papers — name the mechanism, purpose, or context that makes "
-            "them interesting to this researcher, not just the surface topic.",
+            "Answer with 2-3 sentences (no preamble) describing the precise research interest "
+            "that unites these papers. Name the mechanism, purpose, or context that makes "
+            "them interesting to this researcher — not just the surface topic — and note the "
+            "kinds of methods, populations, or settings that recur. Stay concrete and "
+            "specific; every sentence should narrow the interest, not restate it.",
             "Papers:\n" + "\n".join(snippets))
     except Exception as e:
         raise EmbeddingSynthesisError(str(e)[:60])
-    return (stmt or "").strip().strip('"')[:400] or None
+    return (stmt or "").strip().strip('"')[:800] or None
 
 class EmbeddingSynthesisError(Exception):
     pass

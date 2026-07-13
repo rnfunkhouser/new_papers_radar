@@ -100,8 +100,11 @@ days_window            = 14   # how many days back to look (the no-repeat ledger
 top_n                  = 5    # how many papers to surface per briefing
 openalex_concepts      = 22   # how many of your topic areas to search each run
 openalex_per_page      = 200  # papers per page from OpenAlex (200 is their maximum)
-openalex_max_per_concept = 800 # how deep to page per topic (higher = catches papers
-                              # indexed a few days late, at some extra time cost)
+openalex_max_per_concept = 3500 # how deep to page per topic. Broad concepts can hold
+                              # several thousand papers in a 14-day window, and papers
+                              # indexed a few days late sit DEEP in the newest-first
+                              # list — a shallow cap silently misses them. 3500 covers
+                              # the full window for all but the very largest concepts.
 arxiv_max              = 120  # how many recent arXiv preprints to scan
 
 
@@ -132,4 +135,5 @@ type_gate_penalty = 0.40   # score multiplier when it does not
 n_clusters          = 10    # how many topic areas to group your seeds into
 subdivide_threshold = 13    # a topic bigger than this is split into 2-3 sub-angles
 rerank_top          = 200   # how many top candidates the reranker re-reads
-rerank_blend        = 0.6   # how much the reranker counts vs. the embedding score
+rerank_blend        = 0.5   # how much the reranker counts vs. the embedding score
+                            # (0.5 = an even 50/50 blend of the two passes)

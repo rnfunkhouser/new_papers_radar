@@ -105,6 +105,7 @@ template you copy and fill in. After changing config or seeds, re-run
 | File | Role |
 |---|---|
 | `config.toml` | **Your settings** — email, field journals, arXiv cats, scoring knobs (edit this) |
+| `DESIGN_DECISIONS.md` | The pipeline's design decisions, infrastructure-agnostic — for porting to your own VM/LLM |
 | `config.py` | Loads `config.toml` (pure stdlib) and exposes the values to the scripts |
 | `seeds.txt.example` | Template for your seed list — copy to `seeds.txt` and fill in |
 | `harvest.py` | The core: gather, filter, rank, score, select; profile building; Zotero sync |
