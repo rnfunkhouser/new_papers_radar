@@ -18,6 +18,7 @@ Usage:
 import argparse, json, math, re, ssl, sys, time, datetime as dt
 from pathlib import Path
 from urllib.parse import quote
+import urllib.error
 import urllib.request
 
 import config
@@ -78,7 +79,18 @@ GOOD_TYPES = {"article", "preprint", "posted-content"}
 # arXiv categories worth scanning for this field.
 ARXIV_CATS = config.ARXIV_CATS
 
-WEIGHTS = config.WEIGHTS   # quality upweighted per user
+# OSF preprint servers — where communication/polisci/psych preprints actually post
+# (arXiv's cs.* categories miss them entirely; added 2026-07-13).
+OSF_PROVIDERS = tuple(config.OSF_PROVIDERS)
+OSF_MAX_PER_PROVIDER = config.OSF_MAX_PER_PROVIDER
+                             # the cap must cover the whole window (PsyArXiv runs ~100/day;
+                             # SocArXiv ~20/day) or the oldest days silently vanish, the
+                             # same recall gap the OpenAlex deep-paging fix closed
+
+WEIGHTS = config.WEIGHTS   # relevance/quality/recency mix — see config.toml [scoring].
+# (recency defaults to 0: the harvest window already guarantees freshness and the
+# seen-ledger guarantees novelty; rec is still computed and reported in _scores for
+# diagnostics, it just carries no weight by default.)
 
 # Prestige tier — journals so strong that topical fit alone should surface them, even
 # though they aren't in your personal venue lists. Worth q=0.9 (your own venues: 0.7).
@@ -103,16 +115,20 @@ BOOK_REVIEW_RE = re.compile(r"^\s*(book review|review of\b|review essay)", re.I)
 OPENALEX_CONCEPTS = config.OPENALEX_CONCEPTS      # concepts queried per run — enough for 1 guaranteed slot per
                             # cluster (10) plus a dozen filled by global weight (was 14)
 OPENALEX_PER_PAGE = config.OPENALEX_PER_PAGE     # papers per page; OpenAlex free-tier maximum (was 150)
-OPENALEX_MAX_PER_CONCEPT = config.OPENALEX_MAX_PER_CONCEPT   # page THIS deep per concept (via cursor), not just one page.
-                            # Broad concepts hold thousands of papers in a 14-day window
-                            # ("Narrative" ~5k, "Social media" ~2.7k when measured), served
-                            # newest-first. A relevant paper whose publication_date sits at the
-                            # OLD edge of the window — common, because OpenAlex often indexes a
-                            # paper several days AFTER its print date — lands far down that list
-                            # and is silently truncated by a shallow cap (was 150, then 800).
-                            # 3500 covers the whole window for all but the very largest
-                            # concepts; the extra embedding cost is bounded by the
-                            # doc_embeddings cache (each paper is embedded exactly once, ever).
+OPENALEX_MAX_PER_CONCEPT = config.OPENALEX_MAX_PER_CONCEPT  # page THIS deep per concept (via cursor), not just one page.
+                            # Results are served newest-first within the 14-day window, and broad
+                            # level-2 concepts blow far past a shallow cap over 14 days (measured
+                            # 2026-07-13: "Narrative" ~5,031 in-window works, "Social media"
+                            # ~2,722; typical concepts sit in the hundreds). A relevant paper
+                            # whose publication_date sits at the OLD edge of the window — common,
+                            # because OpenAlex often indexes a paper several days AFTER its print
+                            # date — lands deep in that newest-first list and sinks deeper daily,
+                            # so the papers past the cap are exactly the ones the wide window
+                            # exists to catch. 3,500 covers the full window for everything
+                            # measured except "Narrative" (near-total coverage there). Cost is
+                            # ~18 API pages for the biggest concept instead of 4; embedding cost
+                            # is unchanged in steady state because doc_embeddings.json caches
+                            # each paper's vector (expect one expensive first run).
 ARXIV_MAX = config.ARXIV_MAX             # arXiv preprints to scan (was 40)
 
 # Conference proceedings are nudged below full journal articles: a genuinely strong
@@ -132,16 +148,43 @@ def get_json(url, tries=3, pause=1.0, headers=None):
     hdrs = {"User-Agent": f"paper-harvester (mailto:{MAILTO})"}
     if headers:
         hdrs.update(headers)
-    for i in range(tries):
+    fails, rate_hits = 0, 0
+    while True:
         try:
             req = urllib.request.Request(url, headers=hdrs)
             with urllib.request.urlopen(req, timeout=30, context=SSL_CTX) as r:
                 return json.load(r)
-        except Exception as e:
-            if i == tries - 1:
+        except urllib.error.HTTPError as e:
+            # 429 = rate-limited, not broken: honor Retry-After (or back off on a
+            # minutes scale) with extra attempts. The generic seconds-scale retry
+            # below is useless against a sustained throttle, and a failed page
+            # silently amputates that entire concept's remaining pages from the
+            # pool (measured 2026-07-13: repeated harvests tripped OpenAlex's
+            # limiter and the pool collapsed 22k -> 12k, then to arXiv-only).
+            if e.code == 429 and rate_hits < 4:
+                rate_hits += 1
+                wait = 30.0 * (2 ** (rate_hits - 1))
+                ra = e.headers.get("Retry-After") if e.headers else None
+                if ra:
+                    try:
+                        wait = min(float(ra), 300.0)
+                    except ValueError:
+                        pass
+                print(f"  ~ 429 rate-limited; waiting {int(wait)}s (retry {rate_hits}/4)",
+                      file=sys.stderr)
+                time.sleep(wait)
+                continue
+            fails += 1
+            if fails >= tries:
                 print(f"  ! failed {url[:80]}... ({e})", file=sys.stderr)
                 return None
-            time.sleep(pause * (i + 1))
+            time.sleep(pause * fails)
+        except Exception as e:
+            fails += 1
+            if fails >= tries:
+                print(f"  ! failed {url[:80]}... ({e})", file=sys.stderr)
+                return None
+            time.sleep(pause * fails)
 
 def get_text(url, tries=3, pause=1.0):
     for i in range(tries):
@@ -162,7 +205,8 @@ PROFILE_TOP_CONCEPTS = 40      # global concept cap (was 25)
 PER_SEED_GUARANTEE = 2         # always keep each seed's top-N concepts, even if globally weak
 
 def build_profile():
-    dois = [l.strip() for l in SEEDS.read_text().splitlines() if l.strip() and not l.lstrip().startswith("#")]
+    dois = [l.strip() for l in SEEDS.read_text().splitlines()
+            if l.strip() and not l.lstrip().startswith("#")]
     concept_w, author_ids, seed_oa_ids = {}, {}, []
     per_seed_top = []          # each seed's strongest concept ids, so new topics survive the cap
     seed_concepts = {}         # {doi_lower: [ranked concept ids]} for per-cluster retrieval
@@ -212,13 +256,13 @@ def build_profile():
     PROFILE.write_text(json.dumps(prof, indent=2))
     print(f"  saved {len(top)} concepts, {len(author_ids)} seed authors -> {PROFILE.name}")
     print(f"  auto-trusted venues (>=2 seeds): " + (", ".join(trusted_venues) or "none yet"))
-    # Update the semantic-embedding cache for the seeds (best-effort: needs MindRouter /
-    # the campus VPN; if it's unreachable we just keep the concept-tag profile).
+    # Update the semantic-embedding cache for the seeds (best-effort: needs the LLM API
+    # configured in llm_api.json; if it's unreachable we just keep the concept-tag profile).
     try:
         import embeddings
         if embeddings.available():
             cache, n_new = embeddings.update_seed_cache(seed_texts, {d.lower() for d in dois})
-            print(f"  seed embeddings: {len(cache)} cached ({n_new} new) via MindRouter")
+            print(f"  seed embeddings: {len(cache)} cached ({n_new} new)")
             (HERE / "seed_titles.json").write_text(json.dumps(seed_titles))
             clusters = build_clusters(cache, seed_titles)
             if clusters:
@@ -241,7 +285,8 @@ def build_profile():
 # common content words in each cluster's seed titles.
 # ----------------------------------------------------------------------------
 
-SUBDIVIDE_THRESHOLD = config.SUBDIVIDE_THRESHOLD    # a cluster larger than this is split into 2-3 sub-angles, so the
+SUBDIVIDE_THRESHOLD = config.SUBDIVIDE_THRESHOLD
+                            # a cluster larger than this is split into 2-3 sub-angles, so the
                             # reranker and retrieval drill past a big topic's vague common
                             # theme ("anything with a chatbot") to its specific sub-interests.
                             # Small clusters (below this) are left whole and coherent.
@@ -289,7 +334,7 @@ def _retrieval_concepts(clusters, seed_concepts, weighted, cache=None):
     return picked
 
 CLUSTERS = HERE / "clusters.json"
-N_CLUSTERS = config.N_CLUSTERS             # the "top 10 topical areas" shown on the dashboard /topics page
+N_CLUSTERS = 10             # the "top 10 topical areas" shown on the dashboard /topics page
 TOPIC_WEIGHTS = HERE / "topic_weights.json"   # {label: multiplier} from dashboard ± buttons
 
 def load_topic_weights():
@@ -358,9 +403,8 @@ def build_clusters(cache, seed_titles):
 
 # ----------------------------------------------------------------------------
 # Interest statements — the "why" behind each topic cluster. An LLM reads each
-# cluster's seed papers and writes 2-3 sentences on the specific angle that unites
-# them (e.g. not "narrative" but "narrative as a mechanism of persuasion and
-# bridging divides", plus the recurring methods/contexts).
+# cluster's seed papers and writes the specific angle that unites them (e.g. not
+# "narrative" but "narrative as a mechanism of persuasion and bridging divides").
 # Auto-regenerated whenever the profile rebuilds, so nothing is hardcoded and the
 # statements evolve with your seeds. Used two ways: as the reranker's queries, and
 # stored with embeddings in interests.json.
@@ -369,27 +413,44 @@ def build_clusters(cache, seed_titles):
 INTERESTS = HERE / "interests.json"
 
 def _interest_sentence(seed_texts, member_dois):
-    """Short (2-3 sentence) interest statement distilled from a set of seed papers, or None
-    on failure/empty. Shared by the whole-cluster (umbrella) and per-sub-angle calls. These
-    become the reranker's queries, so richer statements carry more of the seeds' specificity
-    into the second-pass relevance judgment."""
+    """One-sentence interest statement distilled from a set of seed papers, or None on
+    failure/empty. Shared by the whole-cluster (umbrella) and per-sub-angle calls.
+    (A 2-3 sentence variant was tried 2026-07-13 and reverted same day: the longer
+    queries fed the cross-encoder didn't sharpen its discrimination.)"""
     import embeddings
     snippets = ["- " + (seed_texts.get(d, "") or "")[:300] for d in member_dois[:15]]
     try:
         stmt = embeddings.chat(
             "You distill a researcher's specific interest from papers they chose to save. "
-            "Answer with 2-3 sentences (no preamble) describing the precise research interest "
-            "that unites these papers. Name the mechanism, purpose, or context that makes "
-            "them interesting to this researcher — not just the surface topic — and note the "
-            "kinds of methods, populations, or settings that recur. Stay concrete and "
-            "specific; every sentence should narrow the interest, not restate it.",
+            "Answer with ONE sentence (no preamble) describing the precise research interest "
+            "that unites these papers — name the mechanism, purpose, or context that makes "
+            "them interesting to this researcher, not just the surface topic.",
             "Papers:\n" + "\n".join(snippets))
     except Exception as e:
         raise EmbeddingSynthesisError(str(e)[:60])
-    return (stmt or "").strip().strip('"')[:800] or None
+    return (stmt or "").strip().strip('"')[:400] or None
 
 class EmbeddingSynthesisError(Exception):
     pass
+
+def _bridge_sentence(seed_texts, members_a, members_b, label_a, label_b):
+    """One-sentence statement of the INTERSECTION interest between two topics — what a
+    paper would look like if it belonged to both at once. Or None on failure/empty."""
+    import embeddings
+    snip = lambda dois: ["- " + (seed_texts.get(d, "") or "")[:250] for d in dois[:8]]
+    try:
+        stmt = embeddings.chat(
+            "You distill a researcher's interests from papers they chose to save. The papers "
+            "below come from two distinct topics in their library. Answer with ONE sentence "
+            "(no preamble) describing the specific research interest at the INTERSECTION of "
+            "the two topics — what a single paper would study if it belonged to both at once. "
+            "Name the mechanism or question that fuses them; do not merely list the two "
+            "topics side by side.",
+            f"Topic A ({label_a}):\n" + "\n".join(snip(members_a)) +
+            f"\n\nTopic B ({label_b}):\n" + "\n".join(snip(members_b)))
+    except Exception as e:
+        raise EmbeddingSynthesisError(str(e)[:60])
+    return (stmt or "").strip().strip('"')[:400] or None
 
 def synthesize_interests(clusters, seed_texts, cache=None):
     """Write one interest statement per topic (interests.json). For a cluster larger than
@@ -425,6 +486,25 @@ def synthesize_interests(clusters, seed_texts, cache=None):
             if len(subs) >= 2:            # need >=2 or there's nothing to drill down TO
                 entry["substatements"] = subs
         out.append(entry)
+    # Bridge statements: prized papers often SPAN two major topics, but a max-over-topics
+    # reranker only sees the best single-topic fit. For each pair of the 5 LARGEST topics
+    # (marginal topics don't get bridges), synthesize an explicit intersection statement so
+    # a genuine bridge paper has a query matching its whole identity. bridge: true entries
+    # sort out of the dashboard's card list (size 0) and are excluded from the rerank
+    # bridge BONUS, which measures spanning on base topics only.
+    from itertools import combinations
+    by_label = {c["label"]: c for c in clusters}
+    top5 = sorted((o["label"] for o in out if o["label"] in by_label),
+                  key=lambda l: -by_label[l]["size"])[:5]
+    for la, lb in combinations(top5, 2):
+        try:
+            s = _bridge_sentence(seed_texts, by_label[la]["members"],
+                                 by_label[lb]["members"], la, lb)
+        except EmbeddingSynthesisError as e:
+            print(f"  ! bridge synthesis failed for '{la}' x '{lb}' ({e})")
+            continue
+        if s:
+            out.append({"label": f"{la} × {lb}", "bridge": [la, lb], "statement": s})
     if not out:
         return
     try:
@@ -520,7 +600,8 @@ DOI_RE = re.compile(r"10\.\d{4,9}/[^\s\"'<>]+", re.I)
 def _existing_seed_dois():
     if not SEEDS.exists():
         return [], set()
-    lines = [l.strip() for l in SEEDS.read_text().splitlines() if l.strip() and not l.lstrip().startswith("#")]
+    lines = [l.strip() for l in SEEDS.read_text().splitlines()
+             if l.strip() and not l.lstrip().startswith("#")]
     return lines, {l.lower() for l in lines}
 
 def resolve_to_doi(text):
@@ -708,7 +789,7 @@ def harvest_openalex(prof, since):
         cursor, pulled = "*", 0
         while cursor and pulled < OPENALEX_MAX_PER_CONCEPT:
             url = (f"https://api.openalex.org/works?filter=from_publication_date:{since},"
-                   f"concepts.id:{short},type:article&per-page={OPENALEX_PER_PAGE}"
+                   f"concepts.id:{short},type:article,language:en&per-page={OPENALEX_PER_PAGE}"
                    f"&sort=publication_date:desc&cursor={quote(cursor)}&mailto={MAILTO}")
             data = get_json(url)
             if not data:
@@ -747,12 +828,28 @@ def parse_openalex(w):
         "created": w.get("created_date", ""),   # when the record appeared ≈ online date;
                                                 # advance-access items carry FUTURE print dates
         "type": w.get("type", ""),
+        "language": w.get("language") or "",
         "abstract": abstract,
         "concept_ids": [c["id"] for c in w.get("concepts", []) if c["score"] >= 0.3],
         "author_ids": [a["author"]["id"] for a in w.get("authorships", []) if a.get("author")],
         "cited_by": w.get("cited_by_count", 0),
         "oa_url": (w.get("open_access") or {}).get("oa_url") or "",
     }
+
+ABSTRACT_CAP = 8000   # sanity bound only — some records carry full-text dumps as the
+                      # "abstract". Real abstracts (≤ ~3000 chars) pass through WHOLE:
+                      # the old hard [:1500] cut abstracts mid-sentence in the briefing
+                      # (seen 2026-07-24). Embedding/judge inputs have their own caps.
+
+def cap_abstract(text):
+    """Full abstract untouched unless absurdly long; if we must cut, cut at the last
+    sentence end so the reader never sees a mid-sentence cliff."""
+    text = (text or "").strip()
+    if len(text) <= ABSTRACT_CAP:
+        return text
+    cut = text[:ABSTRACT_CAP]
+    end = max(cut.rfind(". "), cut.rfind(".\n"), cut.rfind("? "), cut.rfind("! "))
+    return cut[:end + 1] if end > 200 else cut
 
 def reconstruct_abstract(inv):
     if not inv:
@@ -761,7 +858,7 @@ def reconstruct_abstract(inv):
     for word, idxs in inv.items():
         for i in idxs:
             words[i] = word
-    return " ".join(words[i] for i in sorted(words))[:1500]
+    return cap_abstract(" ".join(words[i] for i in sorted(words)))
 
 def harvest_arxiv(since):
     out = []
@@ -782,10 +879,52 @@ def harvest_arxiv(since):
             "source": "arxiv", "doi": "", "title": tag("title"),
             "venue": "arXiv (preprint)",
             "authors": re.findall(r"<name>(.*?)</name>", entry),
-            "date": date, "type": "preprint", "abstract": tag("summary")[:1500],
+            "date": date, "type": "preprint", "abstract": cap_abstract(tag("summary")),
             "concept_ids": [], "author_ids": [], "cited_by": 0,
             "oa_url": (re.search(r'<id>(.*?)</id>', entry) or [None, ""])[1],
         })
+    return out
+
+def harvest_osf(since):
+    """SocArXiv + PsyArXiv preprints via the OSF API. Same record shape as harvest_arxiv:
+    no concepts/author-ids (relevance comes from embeddings), type 'preprint' so the type
+    gate treats them as preferred. DOIs are version-stripped (10.31235/osf.io/xxxx_v2 ->
+    ..._-less) so a revision of an already-shown preprint can't re-surface as new."""
+    out = []
+    for prov in OSF_PROVIDERS:
+        venue = {"socarxiv": "SocArXiv (preprint)",
+                 "psyarxiv": "PsyArXiv (preprint)"}.get(prov, f"{prov} (preprint)")
+        url = ("https://api.osf.io/v2/preprints/?filter[provider]=" + prov
+               + "&filter[date_published][gte]=" + since
+               + "&page[size]=100&sort=-date_published&embed=contributors")
+        pulled = 0
+        while url and pulled < OSF_MAX_PER_PROVIDER:
+            d = get_json(url)
+            if not d:
+                break
+            for r in d.get("data", []):
+                a = r.get("attributes") or {}
+                doi = ((r.get("links") or {}).get("preprint_doi") or "")
+                doi = re.sub(r"_v\d+$", "", doi.replace("https://doi.org/", ""))
+                authors = []
+                for e in ((r.get("embeds") or {}).get("contributors") or {}).get("data", []):
+                    u = (((e.get("embeds") or {}).get("users") or {}).get("data") or {})
+                    name = (u.get("attributes") or {}).get("full_name", "")
+                    if name:
+                        authors.append(name)
+                out.append({
+                    "source": prov, "doi": doi,
+                    "title": (a.get("title") or "").strip(),
+                    "venue": venue, "authors": authors,
+                    "date": (a.get("date_published") or "")[:10],
+                    "type": "preprint",
+                    "abstract": cap_abstract(a.get("description") or ""),
+                    "concept_ids": [], "author_ids": [], "cited_by": 0,
+                    "oa_url": ((r.get("links") or {}).get("html") or ""),
+                })
+            pulled += len(d.get("data", []))
+            url = (d.get("links") or {}).get("next")
+        print(f"  {prov}: {pulled} preprints")
     return out
 
 def harvest_s2_recommendations(prof, since):
@@ -795,7 +934,8 @@ def harvest_s2_recommendations(prof, since):
     # Use ALL seeds as positive examples, not just the first 40 (which starved every
     # recently-added / Zotero seed). Above S2's ~100-id practical limit, take an even
     # spread across the whole list so old core AND recent additions both contribute.
-    all_seeds = [l.strip() for l in SEEDS.read_text().splitlines() if l.strip() and not l.lstrip().startswith("#")]
+    all_seeds = [l.strip() for l in SEEDS.read_text().splitlines()
+                 if l.strip() and not l.lstrip().startswith("#")]
     if len(all_seeds) <= 100:
         chosen = all_seeds
     else:
@@ -803,7 +943,9 @@ def harvest_s2_recommendations(prof, since):
         chosen = [all_seeds[int(i * step)] for i in range(100)]
     body = json.dumps({"positivePaperIds": ["DOI:" + d for d in chosen]}).encode()
     url = ("https://api.semanticscholar.org/recommendations/v1/papers?limit=40"
-           "&fields=title,abstract,venue,year,publicationDate,authors,externalIds,tldr,influentialCitationCount")
+           "&fields=title,abstract,venue,year,publicationDate,authors,externalIds,influentialCitationCount")
+           # (S2 removed 'tldr' from this endpoint's supported fields — including it made
+           # every request 400 and silently killed the whole source; found 2026-07-13)
     data = None
     for attempt in range(3):                       # S2 rate-limits transiently (HTTP 400/429)
         try:
@@ -825,7 +967,7 @@ def harvest_s2_recommendations(prof, since):
             "source": "s2rec", "doi": (p.get("externalIds") or {}).get("DOI", ""),
             "title": p.get("title", ""), "venue": p.get("venue", ""),
             "authors": [a["name"] for a in p.get("authors", [])],
-            "date": p.get("publicationDate") or str(p.get("year", "")),
+            "date": p.get("publicationDate") or str(p.get("year") or ""),
             "type": "article",
             "abstract": p.get("abstract") or (p.get("tldr") or {}).get("text", "") or "",
             "concept_ids": [], "author_ids": [],
@@ -841,6 +983,10 @@ def harvest_s2_recommendations(prof, since):
 def keep(c):
     t = c["title"]
     if not t or NOISE_TITLE.search(t):
+        return False
+    # English only. Belt-and-braces with the OpenAlex language:en API filter; records
+    # from sources that don't report a language (arXiv, S2 recs, watchlist) pass through.
+    if c.get("language") and c["language"] != "en":
         return False
     if c["type"] and c["type"] not in GOOD_TYPES:
         return False
@@ -885,18 +1031,39 @@ def _percentile(sorted_vals, p):
     return sorted_vals[lo] if lo + 1 >= len(sorted_vals) else \
         sorted_vals[lo] + (k - lo) * (sorted_vals[lo + 1] - sorted_vals[lo])
 
-def attach_embedding_relevance(cands, pos_embs, neg_embs=None, nearest_k=3):
+def attach_embedding_relevance(cands, pos_embs, neg_embs=None, nearest_k=3,
+                               contrast="seeds"):
     """Set c['_rel_emb'] in [0,1] = how close a candidate sits to your nearest POSITIVE
     examples (seeds + upvoted papers), with two refinements that tune out noise:
-      • contrastive: subtract part of the candidate's *average* similarity to all positives,
-        so a paper that's only *generically* close (high baseline — the seagrass problem)
-        scores below one that's *specifically* close to a few seeds.
+      • contrastive: subtract part of a 'generic closeness' baseline so a paper that's
+        only *generically* close (high baseline — the seagrass problem) scores below one
+        that's *specifically* close to a few seeds. `contrast` picks the baseline:
+        "seeds" (historical): mean similarity to ALL positives — note this taxes papers
+          at the CENTER of the seed cloud, which resemble many seeds by definition;
+        "pool": similarity to the mean candidate vector — 'generic' means 'close to the
+          average paper harvested today', so closeness to the seed cloud isn't taxed;
+        "none": no subtraction.
       • downvote penalty: if a candidate is closer to a 👎'd paper than to your likes, push it
         down. Then min-max normalize across the run. Candidates without an embedding stay
         tag-scored. Returns how many got an embedding score."""
     import embeddings
     pos = [embeddings.normalize(e) for e in pos_embs]
     neg = [embeddings.normalize(e) for e in (neg_embs or [])]
+    centroid = None
+    if contrast == "pool":
+        acc, n = None, 0
+        for c in cands:
+            emb = c.get("_emb")
+            if not emb:
+                continue
+            v = embeddings.normalize(emb)
+            if acc is None:
+                acc = list(v)
+            else:
+                for i, x in enumerate(v):
+                    acc[i] += x
+            n += 1
+        centroid = embeddings.normalize([x / n for x in acc]) if acc else None
     raws = []
     for c in cands:
         emb = c.get("_emb")
@@ -906,8 +1073,12 @@ def attach_embedding_relevance(cands, pos_embs, neg_embs=None, nearest_k=3):
         sims = sorted((sum(a * b for a, b in zip(v, p)) for p in pos), reverse=True)
         topk = sims[:nearest_k]
         base = sum(topk) / len(topk)
-        meanall = sum(sims) / len(sims)
-        raw = base - 0.3 * meanall                        # contrastive
+        if contrast == "none":
+            raw = base
+        elif contrast == "pool" and centroid is not None:
+            raw = base - 0.3 * sum(a * b for a, b in zip(v, centroid))
+        else:
+            raw = base - 0.3 * (sum(sims) / len(sims))    # historical: mean over seeds
         if neg:
             negmax = max(sum(a * b for a, b in zip(v, p)) for p in neg)
             raw -= 0.5 * max(0.0, negmax - base)          # gentle dislike penalty
@@ -971,50 +1142,184 @@ def impact_quality(c2):
         return 0.0
     return min(0.85, 0.28 * math.log1p(c2))
 
-RERANK_TOP = config.RERANK_TOP             # candidates sent to the cross-encoder (by embedding relevance).
-                            # Wide enough that a paper which sneaks into the final top-N via
-                            # recency/quality still gets contextually judged — otherwise a
-                            # tangential-but-recent match (e.g. narrative-identity in nursing
-                            # education) can ride in without the "is this actually on-topic?" check.
-RERANK_BLEND = config.RERANK_BLEND           # final rel = (1-b)*embedding + b*reranker
+# ----------------------------------------------------------------------------
+# LLM judge (second-stage relevance since 2026-07-23; see judge.py). The judge reads
+# each queued paper's title+abstract against interest_profile.json and its fit/10
+# REPLACES the blended relevance for judged papers. Verdicts are cached per paper per
+# profile version, so the daily cost is only papers new since yesterday.
+# ----------------------------------------------------------------------------
+JUDGE_QUEUE = config.JUDGE_QUEUE
+                            # abstract-having papers judged per run, by embedding relevance.
+                            # Sized from the 2026-07-23 rank check: with contrast="pool",
+                            # all 13 blind-rated bullseyes sat inside the top 1000 (median
+                            # rank 139); junk that rides along is zeroed by the judge.
+JUDGE_QUEUE_BY_SCORE = config.JUDGE_QUEUE_BY_SCORE
+                            # extra queue slots by provisional composite score, so a paper
+                            # that would surface via venue quality still gets judged (the
+                            # union principle inherited from the rerank era).
+FLAVOR_CHANNEL_K = config.FLAVOR_CHANNEL_K
+                            # extra queue slots nearest EACH flavor description embedding —
+                            # catches flavors the seed papers cover thinly (measured miss:
+                            # a narrative-persuasion bullseye at embedding rank 2995 on
+                            # 2026-07-23 because seeds are thin on health storytelling).
 
-def rerank_interests(cands):
-    """Second-stage relevance: a cross-encoder reads each shortlisted candidate TOGETHER
+def judge_relevance(cands, prof):
+    """Second-stage relevance: the LLM judge (judge.py) reads each queued candidate
+    against interest_profile.json. For judged papers, _rel_emb becomes fit/10 and the
+    verdict is attached as judge_fit / judge_why / judge_flavors (shown on cards; the
+    gates keep testing the pre-judge embedding value via _rel_emb_pre). Papers without
+    an abstract are never judged — they keep embedding relevance and the watchlist
+    path. Best-effort: any failure leaves embedding relevance in charge."""
+    try:
+        import embeddings
+        import judge as judgemod
+        profile = judgemod.load_profile()
+        if not profile:
+            print("  (no interest_profile.json — judge skipped, embedding relevance stands)")
+            return
+        pool = [c for c in cands if c.get("_rel_emb") is not None and _has_abstract(c)]
+        if not pool:
+            return
+        q = sorted(pool, key=lambda c: -c["_rel_emb"])[:JUDGE_QUEUE]
+        have = {id(c) for c in q}
+        by_score = sorted(pool, key=lambda c: -score(c, prof))[:JUDGE_QUEUE_BY_SCORE]
+        q += [c for c in by_score if id(c) not in have]
+        have.update(id(c) for c in by_score)
+        try:
+            for fkey, femb in judgemod.flavor_embeddings(profile):
+                near = sorted((c for c in pool if c.get("_emb")),
+                              key=lambda c: -embeddings.cosine(c["_emb"], femb))[:FLAVOR_CHANNEL_K]
+                q += [c for c in near if id(c) not in have]
+                have.update(id(c) for c in near)
+        except Exception as e:
+            print(f"  ! flavor channel skipped ({str(e)[:60]})", file=sys.stderr)
+        up_titles, down_titles = judgemod.recent_vote_titles()
+        verdicts = judgemod.judge(q, key_of, profile, extra_pos=up_titles,
+                                  extra_neg=down_titles,
+                                  progress=lambda m: print(f"  {m}"))
+        n = 0
+        for c in q:
+            v = verdicts.get(key_of(c))
+            if v and v.get("fit", -1) >= 0:
+                c["_rel_emb_pre"] = c["_rel_emb"]
+                c["_rel_emb"] = v["fit"] / 10.0
+                c["judge_fit"] = v["fit"]
+                c["judge_why"] = v["why"]
+                c["judge_flavors"] = v["facets"]
+                n += 1
+        print(f"  judge scored {n}/{len(q)} queued papers (profile "
+              f"{profile.get('version', '?')}, {len(up_titles)}👍/{len(down_titles)}👎 in prompt)")
+        try:
+            a = judgemod.downvote_flavor_alert(profile)
+            if a:
+                print(f"  ⚠ downvote cluster near '{a['flavor']}' ({a['count']}) — alert written")
+        except Exception:
+            pass
+        try:
+            pending = judgemod.coverage_check(profile)
+            if pending:
+                print(f"  💡 {len(pending)} seed cluster(s) not covered by Selection "
+                      f"Criteria — proposal(s) written for the dashboard")
+        except Exception:
+            pass
+    except Exception as e:
+        print(f"  ! judge skipped ({str(e)[:70]})", file=sys.stderr)
+
+# LEGACY knobs — used only by rerank_interests() below, which is retired from the daily
+# flow and kept for rank_report.py / diagnose_paper.py. Deliberately NOT user-facing
+# config (not in config.toml).
+RERANK_TOP = 500             # candidates sent to the cross-encoder — the top RERANK_TOP by
+                            # embedding relevance UNION the top RERANK_TOP by provisional
+                            # composite score (see rerank_interests). The union is what makes
+                            # the guarantee real: a paper that would surface via venue
+                            # quality/recency despite mid-tier embedding relevance still gets
+                            # the "is this actually on-topic?" check. (At the old 200, on a
+                            # deep-paged ~28k pool, 3 of 5 daily picks bypassed the reranker
+                            # entirely — measured 2026-07-13.)
+RERANK_BLEND = 0.5           # final rel = (1-b)*embedding + b*reranker — even 50/50 between
+                            # direct-to-seeds embedding similarity and the statement-mediated
+                            # cross-encoder pass (was 0.6; see blend_comparison.py)
+BRIDGE_T = 0.90              # bridge bonus threshold: a paper's SECOND-best base-topic rerank
+                            # score must clear this before any spanning bonus accrues. High on
+                            # purpose — the cross-encoder's scores compress toward the top
+                            # (most of the shortlist lands 0.87-0.98), so a loose threshold
+                            # would hand the bonus to nearly everything.
+BRIDGE_W = 0.3               # bonus weight: rerank signal = best + BRIDGE_W*max(0, second - BRIDGE_T),
+                            # capped at 1.0 — worth at most ~0.03, a tiebreaker for genuine
+                            # two-topic papers, never a promoter of shallow breadth.
+
+def rerank_interests(cands, prof=None):
+    """LEGACY (retired from the daily flow 2026-07-23; kept for rank_report.py /
+    diagnose_paper.py). Measured on a 15,289-paper pool, the cross-encoder's scores
+    were nearly query-invariant, so this pass added noise, not discrimination —
+    judge_relevance() is the production second stage now.
+
+    Original behavior: a cross-encoder reads each shortlisted candidate TOGETHER
     with each auto-synthesized interest statement and judges contextual fit — this is what
     separates 'narrative, anywhere' from 'narrative as a persuasion/bridging mechanism'.
     Takes the max over interest statements (cluster-aware), blends into _rel_emb for the
-    shortlist. Best-effort: any failure leaves embedding relevance untouched."""
+    shortlist. When prof is given, the shortlist is the UNION of top-RERANK_TOP by embedding
+    relevance and top-RERANK_TOP by provisional composite score (relevance+quality+recency,
+    pre-blend) — so anything that could plausibly reach the briefing gets judged, including
+    papers riding venue quality/recency. Requires _venue_c2 to be set (venue stats run
+    first). Best-effort: any failure leaves embedding relevance untouched."""
     if not INTERESTS.exists():
         return
     try:
         import embeddings
         interests = json.loads(INTERESTS.read_text()).get("interests", [])
-        # For a subdivided (big) topic, query by its specific sub-angles and DROP the vague
-        # umbrella statement — otherwise the max-over-queries would still let a generically
-        # on-topic paper score high off the broad theme. Small topics query by their one
-        # statement as before.
-        queries = []
+        # Queries stay GROUPED by interest entry so each candidate gets a per-topic best
+        # score (feeds the bridge bonus below). For a subdivided (big) topic, query by its
+        # specific sub-angles and DROP the vague umbrella statement — otherwise the
+        # max-over-queries would still let a generically on-topic paper score high off the
+        # broad theme. Small topics query by their one statement; bridge entries
+        # (synthesized intersection statements, bridge: true) by theirs.
+        groups = []                                   # (label, [queries], is_bridge)
         for i in interests:
-            subs = i.get("substatements") or []
-            if subs:
-                queries.extend(subs)
-            elif i.get("statement"):
-                queries.append(i["statement"])
-        if not queries:
+            qs = i.get("substatements") or ([i["statement"]] if i.get("statement") else [])
+            if qs:
+                groups.append((i["label"], qs, bool(i.get("bridge"))))
+        if not groups:
             return
-        short = sorted([c for c in cands if c.get("_rel_emb") is not None],
-                       key=lambda c: -c["_rel_emb"])[:RERANK_TOP]
+        pool = [c for c in cands if c.get("_rel_emb") is not None]
+        short = sorted(pool, key=lambda c: -c["_rel_emb"])[:RERANK_TOP]
+        if prof is not None:
+            prov = {id(c): score(c, prof) for c in pool}   # pre-blend provisional score
+            by_score = sorted(pool, key=lambda c: -prov[id(c)])[:RERANK_TOP]
+            have = {id(c) for c in short}
+            short += [c for c in by_score if id(c) not in have]
         if not short:
             return
         docs = [((c["title"] or "") + ". " + (c["abstract"] or ""))[:1200] for c in short]
-        best = [0.0] * len(short)
-        for q in queries:
-            scores = embeddings.rerank(q, docs)
-            best = [max(b, s) for b, s in zip(best, scores)]
-        for c, r in zip(short, best):
+        topic_best = [{} for _ in short]              # per-candidate {topic label: best score}
+        for label, qs, _ in groups:
+            for q in qs:
+                scores = embeddings.rerank(q, docs)
+                for j, s in enumerate(scores):
+                    if s > topic_best[j].get(label, 0.0):
+                        topic_best[j][label] = s
+        bridge_labels = {label for label, _, isb in groups if isb}
+        for c, tb in zip(short, topic_best):
+            # tb can be EMPTY if the cross-encoder scored this doc <= 0 on every
+            # statement (seen with abstract-less preprints) — a bare max() here would
+            # throw and the try/except would silently discard the whole rerank pass.
+            best = max(tb.values()) if tb else 0.0
+            # BRIDGE BONUS — max-over-topics alone treats "0.97 on one topic" and "0.97 on
+            # one PLUS 0.93 on another" identically, burying papers whose value is exactly
+            # that they span two interests. A small capped lift when the second-best BASE
+            # topic also scores high fixes that. Bridge statements are excluded from the
+            # spanning measurement (they'd double-count — a bridge hit already IS the span).
+            base_scores = sorted((v for l, v in tb.items() if l not in bridge_labels),
+                                 reverse=True)
+            bonus = BRIDGE_W * max(0.0, base_scores[1] - BRIDGE_T) if len(base_scores) > 1 else 0.0
+            r = min(1.0, best + bonus)
             c["_rerank"] = round(r, 3)
+            c["_rerank_topics"] = {l: round(v, 3) for l, v in tb.items()}
+            c["_rel_emb_pre"] = c["_rel_emb"]   # pre-blend embedding relevance; the gates
+                                                # in score() test THIS, not the blend
             c["_rel_emb"] = (1 - RERANK_BLEND) * c["_rel_emb"] + RERANK_BLEND * r
-        print(f"  reranked top {len(short)} against {len(queries)} interest statements")
+        print(f"  reranked top {len(short)} against {len(groups)} topics"
+              f" ({sum(len(qs) for _, qs, _ in groups)} statements)")
     except Exception as e:
         print(f"  ! rerank skipped ({str(e)[:70]})", file=sys.stderr)
 
@@ -1032,7 +1337,15 @@ def score(c, prof):
         rel = min(sum(prof_w[cid] / maxw for cid in c["concept_ids"] if cid in prof_w) / REL_NORM, 1.0)
         rel_src = "tags"
     if c.get("s2_recommended"):
-        rel = max(rel, 0.7)
+        # S2's similar-to-your-seeds signal is a NUDGE, not a verdict. The old
+        # rel = max(rel, 0.7) floor ran after the rerank blend and overrode both
+        # semantic passes — the same veto-bypass class as the 2026-07-13 Nature
+        # incident. Keep the floor only when embeddings are down (S2's judgment
+        # beats concept-tag overlap); otherwise a small additive bonus.
+        if rel_src == "tags":
+            rel = max(rel, 0.7)
+        else:
+            rel = min(1.0, rel + 0.08)
     # quality tiers: prestige (Nature/Science/APSR...) 0.9 > your trusted venues 0.7 > 0;
     # a returning seed author adds 0.3 either way.
     q = 0.0
@@ -1059,6 +1372,15 @@ def score(c, prof):
         rec = 0.3
     s = WEIGHTS["relevance"]*rel + WEIGHTS["quality"]*q + WEIGHTS["recency"]*rec
 
+    # The gates below test the PRE-BLEND embedding relevance — direct similarity to the
+    # seeds — not the blended value. The blend mixes in cross-encoder scores that compress
+    # toward 0.9+ for the whole shortlist, so gating on the blended value silently
+    # recalibrated the gates every time RERANK_BLEND moved. "Is this genuinely close to
+    # what I save?" is the question both gates ask, and the embedding pass answers it on
+    # a stable scale (which is also what the 0.85/0.90 thresholds were tuned against,
+    # pre-rerank). Papers never reranked have no _rel_emb_pre; their rel IS pre-blend.
+    rel_gate = c.get("_rel_emb_pre", rel)
+
     # TYPE GATE — journal articles and preprints are the default diet. Proceedings,
     # repository working papers, and book reviews only surface when REALLY well aligned:
     # above TYPE_GATE_REL they take the old mild haircut; below it they effectively vanish.
@@ -1067,13 +1389,13 @@ def score(c, prof):
                           and not BOOK_REVIEW_RE.search(c.get("title") or "")))
     gated_type = not preferred_type or is_proceedings(c)
     if gated_type:
-        s *= PROCEEDINGS_PENALTY if rel >= TYPE_GATE_REL else TYPE_GATE_PENALTY
+        s *= PROCEEDINGS_PENALTY if rel_gate >= TYPE_GATE_REL else TYPE_GATE_PENALTY
 
     # GEO GATE — non-US/major-European author bases need a STELLAR topical fit. Papers
     # with unknown affiliation (arXiv, S2 recs) pass untouched.
     cc = c.get("countries") or []
     gated_geo = bool(cc) and not (set(cc) & PREFERRED_COUNTRIES)
-    if gated_geo and rel < GEO_GATE_REL:
+    if gated_geo and rel_gate < GEO_GATE_REL:
         s *= GEO_GATE_PENALTY
 
     c["_scores"] = dict(relevance=round(rel, 2), rel_src=rel_src, quality=round(q, 2),
@@ -1114,16 +1436,18 @@ def record_seen(items, seen):
 
 # ----------------------------------------------------------------------------
 # Abstract watchlist — advance-access papers are often listed (title, venue, DOI) days
-# before their abstract is deposited to Crossref. We refuse to SHOW a paper with no real
-# content, but we don't want to silently lose a good one either. So: a strong candidate
-# with no abstract AND no fetchable open-access full text is held here (E), re-checked each
-# day (B), and re-injected to compete the moment its abstract appears (C). Stats let you
-# see the real backfill rate over time (`--watchlist-stats`).
+# before their abstract is deposited to Crossref. We refuse to RANK a paper with no abstract:
+# its embedding/rerank scores would be computed from the TITLE ALONE (which the cross-encoder
+# inflates into a bogus uniform-high score), and full text is fetched only AFTER ranking so it
+# can't help. So a strong candidate with no abstract is held here (E), re-checked each day (B),
+# and re-injected to compete for real the moment its abstract appears (C) — never shown on a
+# title-only score. Stats let you see the real backfill rate over time (`--watchlist-stats`).
 # ----------------------------------------------------------------------------
 
 WATCHLIST = HERE / "watchlist.json"
 WATCHLIST_TTL_DAYS = 30       # stop tracking a paper whose abstract never arrives
-DISPLAY_SCAN_CAP = 40         # how deep to scan (and hold) while filling the abstract-gated top-N
+HOLD_CAP = 60                 # max abstract-less papers to hold per run (bounds watchlist growth;
+                              # display still scans past them to fill the top-N, see the gate below)
 RECHECK_CAP = 60              # max held DOIs re-checked per run (bounds API calls)
 
 def load_watchlist():
@@ -1139,22 +1463,6 @@ def save_watchlist(wl):
 
 def _has_abstract(c):
     return bool((c.get("abstract") or "").strip())
-
-def fulltext_ok(c, outdir, idx):
-    """Can we ACTUALLY fetch real open-access full text for this abstract-less candidate?
-    We used to accept any paper that merely LISTED an OA url — but the real fetcher is far
-    stricter (it rejects <15 KB landing/paywall stubs, non-PDF/HTML bodies, dead links), so
-    a listed-but-unfetchable paper was being shown with neither abstract nor text. Now the
-    gate performs the real fetch: only papers whose full text truly downloads are shown; the
-    rest are held. On success the file is saved + fulltext_path set, so the later fulltext
-    step reuses it instead of re-downloading. Best-effort: any error -> treat as not-ok (hold)."""
-    try:
-        import fetch_fulltext
-        ok, _ = fetch_fulltext.fetch_one(c, outdir, idx)
-        return ok
-    except Exception as e:
-        print(f"  ! fulltext verify failed ({str(e)[:60]}); holding paper", file=sys.stderr)
-        return False
 
 def hold_in_watchlist(c, wl):
     """Record a strong-but-abstract-less candidate so we can resurface it later. Never
@@ -1191,6 +1499,16 @@ def recheck_watchlist(wl, seen):
                 e["status"] = "ready"
                 e["resolved_on"] = today.isoformat()
                 e["days_to_resolve"] = (today - first).days
+                # The paper was embedded from its TITLE ALONE while held; evict that
+                # vector so today's run re-embeds it with the real abstract (the cache
+                # is keyed by identity and would otherwise serve the stale one forever).
+                try:
+                    import embeddings
+                    dc = embeddings.load_doc_cache()
+                    if dc.pop(key_of(parse_openalex(w)), None) is not None:
+                        embeddings.save_doc_cache(dc)
+                except Exception:
+                    pass
             else:
                 continue
         cand = parse_openalex(w)                       # status == 'ready' here
@@ -1277,6 +1595,7 @@ def main():
     cands = []
     cands += harvest_openalex(prof, since)
     cands += harvest_arxiv(since)
+    cands += harvest_osf(since)
     cands += harvest_s2_recommendations(prof, since)
 
     # Watchlist: resurface any advance-access paper whose abstract has appeared since we
@@ -1300,8 +1619,18 @@ def main():
                  and _slug(c.get("title")) not in down_idents]
         print(f"  dropped {before - len(cands)} downvoted paper(s)")
 
+    # Venue impact stats (sliding quality scale) — batched, cached, best-effort. Fetched
+    # BEFORE the rerank so the union shortlist's provisional score sees venue quality.
+    try:
+        stats = fetch_venue_stats([c.get("source_id", "") for c in cands])
+        for c in cands:
+            c["_venue_c2"] = stats.get(c.get("source_id", ""), 0.0)
+        print(f"  venue impact stats for {sum(1 for c in cands if c.get('_venue_c2'))} candidates")
+    except Exception as e:
+        print(f"  ! venue stats skipped ({str(e)[:60]})", file=sys.stderr)
+
     # Semantic relevance: embed every candidate and score it by closeness to your nearest
-    # POSITIVE examples (seeds + upvotes), cluster-aware. Best-effort — if MindRouter/VPN is
+    # POSITIVE examples (seeds + upvotes), cluster-aware. Best-effort — if the LLM API is
     # unreachable, we skip this and score() falls back to concept-tag relevance.
     clusters = []
     try:
@@ -1317,7 +1646,12 @@ def main():
             need_idx, need_txt = [], []
             for i, c in enumerate(cands):
                 hit = doc_cache.get(key_of(c))
-                if hit:
+                # Entry format [date, vec, has_abs]. A vector embedded from a TITLE-ONLY
+                # record is stale the day the abstract lands (watchlist promotions) — the
+                # cache would otherwise serve it forever. has_abs==0 + abstract present
+                # now -> re-embed. Legacy 2-field entries are treated as abstract-backed.
+                stale = hit and len(hit) > 2 and not hit[2] and _has_abstract(c)
+                if hit and not stale:
                     c["_emb"] = embeddings.unpack_vec(hit[1])
                 else:
                     need_idx.append(i)
@@ -1327,30 +1661,26 @@ def main():
                 today = dt.date.today().isoformat()
                 for j, i in enumerate(need_idx):
                     cands[i]["_emb"] = vecs[j]
-                    doc_cache[key_of(cands[i])] = [today, embeddings.pack_vec(vecs[j])]
+                    doc_cache[key_of(cands[i])] = [today, embeddings.pack_vec(vecs[j]),
+                                                   1 if _has_abstract(cands[i]) else 0]
             cutoff = (dt.date.today() - dt.timedelta(days=embeddings.DOC_CACHE_TTL_DAYS)).isoformat()
             doc_cache = {k: v for k, v in doc_cache.items() if v and v[0] >= cutoff}
             embeddings.save_doc_cache(doc_cache)
-            n = attach_embedding_relevance(cands, pos_embs, down_embs)
+            # contrast="pool" since 2026-07-23: "generic" = close to today's average
+            # paper, not close to many seeds — the seeds baseline taxed papers at the
+            # CENTER of the interests (two blind-rated bullseyes fell to ranks
+            # 1407/2009; pool puts all 13 inside the judge queue, median rank 139).
+            n = attach_embedding_relevance(cands, pos_embs, down_embs, contrast="pool")
             print(f"  embedded {len(need_txt)} new + {len(cands) - len(need_txt)} cached"
                   f" -> {n} scored; relevance from {len(seed_embs)} seeds"
                   f" + {len(up_embs)} upvotes, {len(down_embs)} downvotes")
-            rerank_interests(cands)
+            judge_relevance(cands, prof)     # replaced rerank_interests() 2026-07-23
             if CLUSTERS.exists():
                 clusters = json.loads(CLUSTERS.read_text()).get("clusters", [])
         else:
-            print("  (no seed embeddings yet — run --build-profile on VPN; using tag relevance)")
+            print("  (no seed embeddings yet — run --build-profile with the LLM API reachable; using tag relevance)")
     except embeddings.EmbeddingsUnavailable as e:
         print(f"  ! embeddings unavailable ({e}); using concept-tag relevance", file=sys.stderr)
-
-    # Venue impact stats (sliding quality scale) — batched, cached, best-effort.
-    try:
-        stats = fetch_venue_stats([c.get("source_id", "") for c in cands])
-        for c in cands:
-            c["_venue_c2"] = stats.get(c.get("source_id", ""), 0.0)
-        print(f"  venue impact stats for {sum(1 for c in cands if c.get('_venue_c2'))} candidates")
-    except Exception as e:
-        print(f"  ! venue stats skipped ({str(e)[:60]})", file=sys.stderr)
 
     tweights = load_topic_weights()
     for c in cands:
@@ -1371,24 +1701,28 @@ def main():
         cands = [c for c in cands if key_of(c) not in seen]
         print(f"  excluded {before - len(cands)} already-shown papers")
 
-    # Abstract gate + hold-back: only SHOW papers we have real content for — an abstract,
-    # or fetchable open-access full text (D). A strong candidate with neither is held to the
-    # watchlist (E) and re-checked daily (B/C) instead of being shown as an empty stub or
-    # lost. We scan in score order until we have --top displayable papers.
-    top, scanned, held = [], 0, 0
-    ft_outdir = HERE / "fulltext" / dt.date.today().isoformat()
+    # Abstract gate + hold-back: only RANK/SHOW papers that have an abstract — the only real
+    # content available at scoring time (full text is fetched later, post-selection, so it can't
+    # inform the ranking). A strong candidate with no abstract is held to the watchlist (E) and
+    # re-checked daily (B/C) so it competes for real once its abstract lands, instead of riding a
+    # title-only score. We scan in score order until we have --top displayable papers.
+    top, held = [], 0
     for c in cands:
-        if len(top) >= args.top or scanned >= DISPLAY_SCAN_CAP:
+        if len(top) >= args.top:
             break
-        scanned += 1
         if _has_abstract(c):
             top.append(c)
-        elif fulltext_ok(c, ft_outdir, len(top) + 1):
-            c["_oa_no_abstract"] = True     # no abstract, but full text VERIFIED-fetchable
-            top.append(c)
-        else:
-            hold_in_watchlist(c, wl)        # no abstract, no fetchable full text -> hold + track
+        elif held < HOLD_CAP:
+            # No abstract at RANKING time -> the embedding/rerank scores were computed from the
+            # TITLE ALONE, which the cross-encoder inflates into a spuriously high, undiscriminating
+            # score (~0.93 across every topic — see the 2026-07-17 "black holes" misfire). Full text
+            # is fetched only AFTER selection, so it can never inform the ranking. We refuse to rank a
+            # title-only paper: hold the strongest such papers (they outrank what we're showing) so
+            # they compete for real once their abstract lands (B/C), and keep scanning past them to
+            # fill the display slots — an abstract-less paper never crowds a real one out of the brief.
+            hold_in_watchlist(c, wl)
             held += 1
+        # else: abstract-less beyond HOLD_CAP -> skip (re-harvested tomorrow); keep filling top.
     if not args.include_seen:
         save_watchlist(wl)
     print(f"  {len(cands)} eligible; showing {len(top)} with real content"

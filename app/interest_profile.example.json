@@ -1,0 +1,37 @@
+{
+  "version": "example-1",
+  "_note": "EXAMPLE Selection Criteria (this shipped file is a template — the real file is interest_profile.json, which is gitignored). Copy this to interest_profile.json and REWRITE EVERY FIELD IN YOUR OWN WORDS: the LLM judge reads core_statement, flavors, fit_rule, negatives, and the exemplar titles verbatim, so they must describe YOUR interests, not this political-communication example. You can also edit everything later from the dashboard's Selection Criteria page (saving there bumps the version, which re-judges the whole window under your new wording).",
+  "core_statement": "I am a political-communication researcher. I study how communication — increasingly AI-mediated — persuades, changes behavior, and bridges or deepens ideological divides, especially online. My interests come in a few specific flavors (below); the best papers for me sit squarely inside one flavor or connect several. Papers about just 'AI' in general, or 'politics' in general, are background noise. AI matters to me as a COMMUNICATOR or INTERVENTION (a chatbot that persuades, an LLM that delivers arguments), not as an object of public opinion or a research tool.",
+  "flavors": [
+    {
+      "key": "bridging_divides",
+      "description": "Communication mechanisms for bridging ideological divides, especially online: depolarization interventions, cross-partisan conversation, perspective-taking dialogues, correcting misperceptions of the out-group, reducing partisan animosity and incivility."
+    },
+    {
+      "key": "narrative_persuasion",
+      "description": "Narrative as a persuasion mechanism, in any domain (political, health, climate, civic): narrative transportation, entertainment-education, story-based appeals, narrative vs non-narrative message effects, inoculation/prebunking delivered through stories."
+    },
+    {
+      "key": "llm_persuasion_online",
+      "description": "LLMs and generative AI as persuaders in online and political contexts: AI-generated persuasive messages, persuasive bots, generative agents spreading or countering misinformation, AI's persuasive advantage over humans, computational propaganda with generative AI."
+    }
+  ],
+  "fit_rule": "Each flavor is already an intersection of my interests, so a paper squarely inside ONE flavor is a bullseye — it does not also need to touch the others. Connecting two or more flavors makes it even better. 'Squarely inside' means the flavor is the paper's central research question, tested or theorized substantively — not a passing mention, an application domain, or a motivating citation.",
+  "negatives": [
+    "Public attitudes TOWARD AI, AI governance, or AI ethics — where AI is the object of opinion rather than the communicator or intervention",
+    "LLMs as research or measurement tools (generating surveys, coding data, content analysis of model outputs) with no persuasion or behavior-change outcome",
+    "Chatbot UX, companionship, loneliness, or adoption studies with no persuasion, behavior-change, or political dimension",
+    "Consumer/brand marketing and purchase-decision persuasion with no narrative mechanism and no political dimension",
+    "Broad state-of-AI or state-of-democracy think pieces with no empirical question"
+  ],
+  "positive_exemplar_titles": [
+    "Conversational AI shifts beliefs and policy support among skeptics across contested societal issues",
+    "Biased Motive Inferences of Online Outrage Undermine Cross-Partisan Conversations",
+    "Vapor Tales: The Effects of Narrative Fear Appeal on Vaping Cessation Among American Young Adults"
+  ],
+  "negative_exemplar_titles": [
+    "Do LLMs Ask the Right Questions? Evaluating GPT-Generated Surveys as Instruments for Measuring Social Attitudes",
+    "Artificial intelligence in government: why people feel they lose control",
+    "Chatbots and Loneliness: How Linguistic Dynamics in Conversations with Chatbots Shape Young Adults' Loneliness (fine paper, but chatbot wellbeing without persuasion/politics is a near-miss, not a hit)"
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "_comment": "Copy to llm_api.json (and `chmod 600 llm_api.json`), then fill in the four real fields below. This configures the ONE LLM endpoint the radar uses for embeddings, the relevance judge, and the briefing prose. Any OpenAI-compatible API works: OpenAI itself, a campus gateway, or a self-hosted server (vLLM, Ollama, LM Studio...). Called with stdlib urllib — no pip packages needed. Keys starting with _ are ignored.",
+  "_keys": "base_url + api_key are required. embedding_model is REQUIRED (no default — set a model your provider actually serves; GET <base_url>/models lists them). chat_model pins the chat model; or give chat_models (an ordered preference list, first one present in the provider's live catalog wins); if you set neither, the largest chat-capable model in GET /models is used. rerank_model is OPTIONAL and only used by the legacy diagnostics scripts — most providers have no /rerank endpoint and the daily pipeline never calls it.",
+
+  "base_url": "https://your-provider.example.com/v1",
+  "api_key": "",
+  "embedding_model": "",
+  "chat_model": "",
+
+  "_example_openai": {
+    "_note": "Illustrative — check current model names/pricing at platform.openai.com.",
+    "base_url": "https://api.openai.com/v1",
+    "api_key": "sk-...",
+    "embedding_model": "text-embedding-3-large",
+    "chat_model": "gpt-4o-mini"
+  },
+  "_example_campus_gateway_or_selfhosted": {
+    "_note": "Any OpenAI-compatible server (vLLM, Ollama, LM Studio, LiteLLM proxy, a university LLM gateway...). Use the model names YOUR server serves. chat_models is an ordered fallback list for when a model gets decommissioned.",
+    "base_url": "https://llm-gateway.example.edu/v1",
+    "api_key": "your-gateway-key",
+    "embedding_model": "your-embedding-model-name",
+    "chat_models": ["your-first-choice-chat-model", "your-fallback-chat-model"],
+    "rerank_model": "optional-reranker-name-if-your-server-has-rerank"
+  }
+}

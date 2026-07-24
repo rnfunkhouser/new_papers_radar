@@ -1,4 +1,4 @@
-# Daily Articles Briefing — campus VM deployment.
+# Daily Papers Radar — campus VM deployment.
 # Code + all mutable state (seeds, profile, ledgers, briefings, logs, secrets) live in this
 # folder on the VM host and are bind-mounted at /app, so `docker compose up --build` never
 # wipes history. deploy.sh rsyncs the code files here and runs this.
@@ -14,8 +14,8 @@ services:
       DASH_HOST: "0.0.0.0"   # public bind (proxy sits in front)
       DASH_PORT: "8001"
       DASH_PASSWORD: "changeme"  # CHANGE THIS: gate on votes/weights; reading stays open
-      BRIEFING_WRITER: "mindrouter"
+      BRIEFING_WRITER: "llm"
       PROJECT_DIR: "/app"
       TZ: "America/Los_Angeles"    # set to your campus timezone (e.g. America/Boise)
     volumes:
-      - ./:/app              # code + state + secrets (mindrouter.json, .briefing_env) from the host
+      - ./:/app              # code + state + secrets (llm_api.json, .briefing_env) from the host

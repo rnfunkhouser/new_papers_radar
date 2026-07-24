@@ -58,19 +58,22 @@ _briefing = _section("briefing")
 _field    = _section("field")
 _harvest  = _section("harvest")
 _scoring  = _section("scoring")
-_rerank   = _section("rerank")
+_judge    = _section("judge")
 
 # ---------------------------------------------------------------------------
 # [contact]
 # ---------------------------------------------------------------------------
+# OpenAlex/Crossref/Unpaywall use this for their "polite pool" — faster, more
+# reliable service in exchange for a who-is-calling identifier.
 MAILTO = _contact.get("mailto", "you@example.edu")
 
 # ---------------------------------------------------------------------------
 # [briefing]
 # ---------------------------------------------------------------------------
-BRIEFING_AUDIENCE = _briefing.get(
-    "audience",
-    "a researcher (summarize each paper faithfully for a specialist in the field)")
+# One sentence describing whose interests the daily write-ups are for, e.g.
+# "a political-communication scholar (interests: persuasion, narrative,
+#  deliberation, misinformation, AI/LLM persuasion)".
+BRIEFING_AUDIENCE = _briefing.get("audience", "a researcher")
 
 # ---------------------------------------------------------------------------
 # [field]  — names match the constants harvest.py has always used, so the rest
@@ -82,8 +85,8 @@ VENUE_ALLOWLIST = [v.lower().strip() for v in _field.get("trusted_venues", [])]
 
 PRESTIGE_VENUES = tuple(v.lower().strip() for v in _field.get("prestige_venues", (
     "nature", "science", "proceedings of the national academy of sciences", "pnas",
-    "nature human behaviour", "nature communications", "science advances",
-    "psychological science",
+    "nature human behaviour", "nature communications", "nature climate change",
+    "science advances", "psychological science",
 )))
 
 PREFERRED_COUNTRIES = {c.upper().strip() for c in _field.get("preferred_countries", [
@@ -98,16 +101,19 @@ DAYS_WINDOW              = int(_harvest.get("days_window", 14))
 TOP_N                    = int(_harvest.get("top_n", 5))
 OPENALEX_CONCEPTS        = int(_harvest.get("openalex_concepts", 22))
 OPENALEX_PER_PAGE        = int(_harvest.get("openalex_per_page", 200))
-OPENALEX_MAX_PER_CONCEPT = int(_harvest.get("openalex_max_per_concept", 800))
+OPENALEX_MAX_PER_CONCEPT = int(_harvest.get("openalex_max_per_concept", 3500))
 ARXIV_MAX                = int(_harvest.get("arxiv_max", 120))
+OSF_PROVIDERS            = tuple(_harvest.get("osf_providers", ["socarxiv", "psyarxiv"]))
+OSF_MAX_PER_PROVIDER     = int(_harvest.get("osf_max_per_provider", 1600))
+SUBDIVIDE_THRESHOLD      = int(_harvest.get("subdivide_threshold", 13))
 
 # ---------------------------------------------------------------------------
 # [scoring]
 # ---------------------------------------------------------------------------
 WEIGHTS = dict(
-    relevance=float(_scoring.get("weight_relevance", 0.50)),
-    quality=float(_scoring.get("weight_quality", 0.35)),
-    recency=float(_scoring.get("weight_recency", 0.15)),
+    relevance=float(_scoring.get("weight_relevance", 0.73)),
+    quality=float(_scoring.get("weight_quality", 0.27)),
+    recency=float(_scoring.get("weight_recency", 0.0)),
 )
 REL_NORM            = float(_scoring.get("rel_norm", 3.0))
 PROCEEDINGS_PENALTY = float(_scoring.get("proceedings_penalty", 0.75))
@@ -117,9 +123,11 @@ TYPE_GATE_REL       = float(_scoring.get("type_gate_rel", 0.85))
 TYPE_GATE_PENALTY   = float(_scoring.get("type_gate_penalty", 0.40))
 
 # ---------------------------------------------------------------------------
-# [rerank]
+# [judge]
 # ---------------------------------------------------------------------------
-N_CLUSTERS          = int(_rerank.get("n_clusters", 10))
-SUBDIVIDE_THRESHOLD = int(_rerank.get("subdivide_threshold", 13))
-RERANK_TOP          = int(_rerank.get("rerank_top", 200))
-RERANK_BLEND        = float(_rerank.get("rerank_blend", 0.6))
+JUDGE_QUEUE          = int(_judge.get("judge_queue", 1000))
+JUDGE_QUEUE_BY_SCORE = int(_judge.get("judge_queue_by_score", 300))
+FLAVOR_CHANNEL_K     = int(_judge.get("flavor_channel_k", 100))
+MAX_VOTE_EXAMPLES    = int(_judge.get("max_vote_examples", 10))
+ALERT_MIN_DOWNVOTES  = int(_judge.get("alert_min_downvotes", 3))
+ALERT_WINDOW_DAYS    = int(_judge.get("alert_window_days", 30))

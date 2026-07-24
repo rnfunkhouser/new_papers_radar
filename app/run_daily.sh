@@ -7,11 +7,11 @@
 # Portable between the Mac (launchd) and the campus VM container (cron). Two env knobs,
 # both with Mac-preserving defaults so nothing changes on the Mac if they're unset:
 #   PROJECT_DIR       — folder path (default: the folder this script lives in)
-#   BRIEFING_WRITER   — "claude" (default; uses `claude -p`, needs no VPN on the Mac) or
-#                       "mindrouter" (uses write_briefing.py via the campus LLM; set in the
-#                       container, where MindRouter is always reachable)
+#   BRIEFING_WRITER   — "llm" (default; uses write_briefing.py via the OpenAI-compatible
+#                       API in llm_api.json; this is what the container sets) or
+#                       "claude" (alternative writer; needs the Claude Code CLI + login)
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$(dirname "$0")" && pwd)}"
-BRIEFING_WRITER="${BRIEFING_WRITER:-claude}"
+BRIEFING_WRITER="${BRIEFING_WRITER:-llm}"
 
 set -uo pipefail
 cd "$PROJECT_DIR" || exit 1
@@ -47,18 +47,17 @@ echo "--- fulltext ---"
 python3 fetch_fulltext.py || echo "fulltext fetch skipped"
 
 # 2. Write the briefing -------------------------------------------------------
-if [[ "$BRIEFING_WRITER" == "mindrouter" ]]; then
-  echo "--- mindrouter briefing ---"
-  python3 write_briefing.py "$DATE" || { echo "mindrouter briefing failed"; exit 1; }
+if [[ "$BRIEFING_WRITER" == "llm" ]]; then
+  echo "--- llm briefing ---"
+  python3 write_briefing.py "$DATE" || { echo "llm briefing failed"; exit 1; }
 else
 echo "--- claude briefing ---"
 PROMPT="Read candidates.json in this folder (a ranked shortlist of new papers with \
 abstracts; each record has 'doi' and 'oa_url' fields). Write today's briefing and save \
-it to briefings/briefing_${DATE}.md. Title the document EXACTLY '# Daily Articles \
-Briefing' on the first line, with '### <full weekday>, <Month> <D>, <YYYY>' as the date \
-subheading on the next line. For everything else match the house style in \
-sample_briefing_2026-06-29.md: a hook headline per paper and the citation line (authors · \
-venue · date). DATES: records may carry a FUTURE 'date' (an advance-access print date) — \
+it to briefings/briefing_${DATE}.md. Title the document EXACTLY '# Daily Papers \
+Radar' on the first line, with '### <full weekday>, <Month> <D>, <YYYY>' as the date \
+subheading on the next line. For everything else use this house style: \
+a hook headline per paper and the citation line (authors · venue · date). DATES: records may carry a FUTURE 'date' (an advance-access print date) — \
 never present a future date as the publication date; cite those as 'in press' and, when \
 the record has a past 'created' date, give it as the online date (e.g. 'online June 28, \
 2026 · in press'). Write EVERY paper at full depth — roughly 300-450 words each by default, \

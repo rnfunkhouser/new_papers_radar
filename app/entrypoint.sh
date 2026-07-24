@@ -12,5 +12,5 @@ if [ -f /app/crontab ]; then
 fi
 cron
 
-echo "dashboard starting on ${DASH_HOST:-0.0.0.0}:${DASH_PORT:-8001} (writer=${BRIEFING_WRITER:-mindrouter})"
+echo "dashboard starting on ${DASH_HOST:-0.0.0.0}:${DASH_PORT:-8001} (writer=${BRIEFING_WRITER:-llm})"
 exec python3 /app/dashboard.py

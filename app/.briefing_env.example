@@ -12,4 +12,4 @@ BRIEFING_GMAIL_USER=you@gmail.com
 BRIEFING_GMAIL_APP_PASSWORD=xxxxxxxxxxxxxxxx
 
 # Where the morning email goes (defaults to BRIEFING_GMAIL_USER if omitted).
-BRIEFING_EMAIL_TO=you@uidaho.edu
+BRIEFING_EMAIL_TO=you@example.edu

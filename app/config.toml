@@ -19,18 +19,21 @@
 # Your email address. It is sent to the free scholarly databases (OpenAlex,
 # Crossref, Unpaywall) as a courtesy "who is calling" identifier — this is their
 # published etiquette and it makes their service faster and more reliable for
-# you. It is NOT published anywhere and is NOT used to email you (that is set
-# separately, in the .briefing_env file). CHANGE THIS to your address.
-mailto = "you@uidaho.edu"
+# you (the OpenAlex "polite pool"). It is NOT published anywhere and is NOT used
+# to email you (that is set separately, in the .briefing_env file).
+# CHANGE THIS to your address.
+mailto = "you@example.edu"
 
 
 [briefing]
 # One sentence describing whose interests the daily write-ups are for. The
 # writing model is told this so summaries are pitched at the right reader. Keep
-# it short and specific to your field. Example for a different field:
+# it short and specific to your field. Examples:
+#   "a political-communication scholar (interests: persuasion, narrative,
+#    deliberation, misinformation, AI/LLM persuasion)"
 #   "a public-health researcher (interests: vaccine uptake, health messaging,
-#    behavior change, health equity)".
-audience = "a political-communication scholar (interests: persuasion, narrative, deliberation, misinformation, AI/LLM persuasion)"
+#    behavior change, health equity)"
+audience = "a researcher"
 
 
 [field]
@@ -107,15 +110,31 @@ openalex_max_per_concept = 3500 # how deep to page per topic. Broad concepts can
                               # the full window for all but the very largest concepts.
 arxiv_max              = 120  # how many recent arXiv preprints to scan
 
+# OSF preprint servers to scan (SocArXiv for the social sciences, PsyArXiv for
+# psychology — where communication/polisci/psych preprints actually post; arXiv's
+# cs.* categories miss them entirely). Set to [] to skip OSF.
+osf_providers          = ["socarxiv", "psyarxiv"]
+osf_max_per_provider   = 1600 # preprints per server per run. Must cover the whole
+                              # days_window (PsyArXiv runs ~100/day) or the oldest
+                              # days silently vanish from the pool.
+
+subdivide_threshold    = 13   # when building your profile, a seed topic bigger than
+                              # this is split into 2-3 sub-angles so retrieval drills
+                              # past a big topic's vague common theme to its specific
+                              # sub-interests. Smaller topics are left whole.
+
 
 [scoring]
 # ----------------------------------------------------------------------------
 #  How a paper's final score is composed, and how harshly the "long tail" is
 #  filtered. Advanced — safe to leave alone. The three weights should sum to 1.
 # ----------------------------------------------------------------------------
-weight_relevance = 0.50   # topical closeness to your seed papers
-weight_quality   = 0.35   # venue prestige / trusted journals / citation impact
-weight_recency   = 0.15   # newer is better
+weight_relevance = 0.73   # topical closeness to your interests (embeddings + LLM judge)
+weight_quality   = 0.27   # venue prestige / trusted journals / citation impact
+weight_recency   = 0.0    # newer is better. Zero by default: the harvest window
+                          # already guarantees freshness and the no-repeat ledger
+                          # guarantees novelty, so within the window papers are
+                          # ranked by fit, not age.
 
 rel_norm            = 3.0   # tag-relevance reaches 1.0 at ~3 strong concept matches
 proceedings_penalty = 0.75  # score multiplier for conference/proceedings papers
@@ -128,12 +147,22 @@ type_gate_rel     = 0.85   # relevance a non-journal item needs to escape the ga
 type_gate_penalty = 0.40   # score multiplier when it does not
 
 
-[rerank]
+[judge]
 # ----------------------------------------------------------------------------
-#  The second-pass "read it in context" reranker. Advanced — leave as-is.
+#  The LLM judge — the second (and decisive) relevance stage. After embeddings
+#  shortlist the day's harvest, an LLM reads each queued paper's title+abstract
+#  against your plain-English Selection Criteria (interest_profile.json, editable
+#  from the dashboard) and scores its fit 0-10; that score replaces the embedding
+#  relevance for judged papers. Verdicts are cached per paper per profile
+#  version, so the daily cost is only papers new since yesterday. Advanced —
+#  safe to leave alone.
 # ----------------------------------------------------------------------------
-n_clusters          = 10    # how many topic areas to group your seeds into
-subdivide_threshold = 13    # a topic bigger than this is split into 2-3 sub-angles
-rerank_top          = 200   # how many top candidates the reranker re-reads
-rerank_blend        = 0.5   # how much the reranker counts vs. the embedding score
-                            # (0.5 = an even 50/50 blend of the two passes)
+judge_queue          = 1000 # papers judged per run, taken by embedding relevance
+judge_queue_by_score = 300  # extra queue slots by provisional composite score, so a
+                            # paper that would surface via venue quality still gets judged
+flavor_channel_k     = 100  # extra queue slots nearest EACH interest-flavor description —
+                            # catches flavors your seed papers cover only thinly
+max_vote_examples    = 10   # newest 👍/👎 votes per side shown to the judge as examples
+alert_min_downvotes  = 3    # this many downvotes near one flavor within the window below
+                            # triggers a "consider editing your criteria" alert
+alert_window_days    = 30   # the window for counting those downvotes

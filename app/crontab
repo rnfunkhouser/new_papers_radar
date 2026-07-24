@@ -1,0 +1,4 @@
+# Daily briefing at 05:57 (container TZ is set in docker-compose.yml). Env is set
+# inline because cron strips the container's ENV from job execution.
+57 5 * * * cd /app && PROJECT_DIR=/app BRIEFING_WRITER=llm bash /app/run_daily.sh >> /app/logs/cron.log 2>&1
+# (a trailing newline is required by cron)

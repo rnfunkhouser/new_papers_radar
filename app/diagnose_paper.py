@@ -8,7 +8,7 @@ actually would have), embeds + scores everything, then reranks the shortlist TWI
 the OLD umbrella interest statements, once with the NEW drilled-down sub-angles — and reports
 where the target paper lands each way.
 
-Run inside the VM container (MindRouter reachable):
+Run inside the VM container (LLM API reachable):
   docker compose exec -T briefing python3 diagnose_paper.py \
       --doi 10.1177/20563051261462091 --since 2026-07-01 --top 5
 

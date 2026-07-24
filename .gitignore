@@ -1,43 +1,46 @@
 # === secrets — NEVER commit ===
-mindrouter.json
-.briefing_env
-zotero.json
-.deploy_env
+app/llm_api.json
+app/.briefing_env
+app/zotero.json
+app/.deploy_env
 *.key
 
-# === your personal seed list (the .example template IS committed) ===
-seeds.txt
+# === your personal files (the .example templates ARE committed) ===
+app/seeds.txt
+app/interest_profile.json
 
 # === large embedding caches (rebuildable; some >25MB) ===
 # NOTE: keep comments on their OWN line — git treats an inline '#' as part of the pattern.
-doc_embeddings.json
-seeds_embeddings.json
-feedback_embeddings.json
+app/*_embeddings.json
 
 # === derived profile artifacts (regenerate with: harvest.py --build-profile) ===
-seeds_profile.json
-seed_titles.json
-clusters.json
-interests.json
+app/seeds_profile.json
+app/seed_titles.json
+app/clusters.json
+app/interests.json
 
 # === mutable runtime ledgers / state ===
-seen.json
-watchlist.json
-feedback.json
-topic_weights.json
-venue_stats.json
-zotero_imported.json
-candidates.json
+app/judge_cache.json
+app/alerts.json
+app/proposals.json
+app/seen.json
+app/watchlist.json
+app/feedback.json
+app/topic_weights.json
+app/venue_stats.json
+app/zotero_imported.json
+app/candidates.json
 
 # === daily outputs & runtime dirs ===
-briefings/
-fulltext/
-logs/
-cards_*.json
-data_*.json
+app/briefings/
+app/fulltext/
+app/logs/
+app/cards_*.json
+app/data_*.json
 
 # === diagnostics scratch ===
-diagnose_*.json
+app/diagnose_*.json
+app/experiment_caches/
 
 # === tooling / python ===
 .claude/
@@ -45,6 +48,7 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+.DS_Store
 
-# NOTE: config.toml IS committed — it holds your (non-secret) settings and the
+# NOTE: app/config.toml IS committed — it holds your (non-secret) settings and the
 # working defaults new users start from. Edit it in place to tune the radar.

@@ -15,7 +15,7 @@ Credentials (so nothing secret lives in code) are read from the environment, or 
 ".briefing_env" file next to this script (KEY=VALUE per line):
     BRIEFING_GMAIL_USER=you@gmail.com
     BRIEFING_GMAIL_APP_PASSWORD=xxxxxxxxxxxxxxxx     # a Gmail *App Password*, not your login
-    BRIEFING_EMAIL_TO=you@uidaho.edu
+    BRIEFING_EMAIL_TO=you@example.edu
 
 Flags:
     --no-email     just build the PDF (handy for testing the conversion)
@@ -193,7 +193,7 @@ def send_email(pdf_path, subject, env):
     msg = EmailMessage()
     msg["From"], msg["To"], msg["Subject"] = user, to, subject
     dash_url = os.environ.get("DASH_URL", "http://localhost:8765")
-    msg.set_content("Your Daily Articles Briefing is attached as a PDF.\n\n"
+    msg.set_content("Your Daily Papers Radar briefing is attached as a PDF.\n\n"
                     "Rate today's papers (👍/👎) and search the archive on the dashboard:\n"
                     f"  {dash_url}\n\n"
                     "The full markdown archive also lives in the briefings/ folder.")
@@ -235,7 +235,7 @@ def main():
 
     if not args.no_email:
         date = re.search(r"(\d{4}-\d{2}-\d{2})", md_path.name)
-        subject = f"Daily Articles Briefing — {date.group(1) if date else md_path.stem}"
+        subject = f"Daily Papers Radar — {date.group(1) if date else md_path.stem}"
         send_email(pdf_path, subject, load_env())
 
 if __name__ == "__main__":

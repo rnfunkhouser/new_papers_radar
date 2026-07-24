@@ -1,222 +1,223 @@
 # Design decisions
 
-The pipeline's design decisions, independent of any particular infrastructure. Everything
-below works the same whether the "smart" parts run on a campus LLM gateway, a locally hosted
-model, or a commercial API — you need an **embedding model**, a **cross-encoder reranker**,
-and a **chat LLM** (we use Qwen3-Embedding-8B, Qwen3-Reranker-8B, and whatever large chat
-model the gateway offers; nothing depends on those specific models). Everything else is free
-public scholarly APIs: OpenAlex, Crossref, arXiv, Semantic Scholar, Unpaywall, Zotero.
+How the radar actually thinks, and why each piece is built the way it is — in plain English,
+for anyone who wants to understand or change the machinery. Nothing here depends on any
+particular infrastructure: the "smart" parts need an **embedding model** and a **chat LLM**
+from any OpenAI-compatible API; everything else is free public scholarly APIs (OpenAlex,
+Crossref, arXiv, OSF preprint servers, Semantic Scholar, Unpaywall, Zotero).
 
-## Seeds (the taste profile)
+## The two-stage vocabulary: Gathering and Selection
 
-- The user's taste is defined entirely by a flat list of DOIs (`seeds.txt`), all at equal
-  weight. No hand-written keyword lists or topic descriptions.
-- Seeds can be added as raw DOIs or as APA-style citations — citations are resolved via
-  Crossref bibliographic search; matches under a confidence score of 60 are flagged for
-  manual verification.
-- A public Zotero library can act as a live seed source. The sync is **append-only with a
-  ledger** of every Zotero item key and DOI ever processed: adding to Zotero adds a seed;
-  removing from Zotero never removes a seed; manually deleting from `seeds.txt` is never
-  undone by a re-sync. Only scholarly item types are synced (articles, chapters, preprints,
-  reports, theses — not notes, attachments, web pages). DOI-less Zotero items are resolved
-  via Crossref only when the match score is ≥ 70; otherwise skipped and logged.
+The whole system reduces to two stages with deliberately different owners:
 
-From the seeds, a rebuildable profile is derived (nothing hand-maintained):
+- **Gathering** casts the net. It is steered by your **seed papers** — a flat list of DOIs —
+  and everything about it is *learned automatically*: which areas to search, which venues to
+  trust, what your taste "looks like" numerically. You tune it by adding papers, never by
+  maintaining keywords.
+- **Selection** makes the call. It is steered by your **Selection Criteria**
+  (`interest_profile.json`) — a page of *plain English you write yourself*: who you are,
+  your interest "flavors," what you're explicitly not interested in, example papers you'd
+  love or reject. An LLM judge reads every shortlisted paper against this page.
 
-- **Concept tags**: each seed's OpenAlex concepts with score ≥ 0.3, **excluding level 0–1
-  root concepts** ("Political science", "Artificial intelligence") — they match everything
-  and drown out what actually distinguishes the interests. Keep the ~40 globally strongest
-  concepts, then union in each seed's top 2 concepts so a small, newly added topic is
-  guaranteed to register.
+This split is the project's core design bet: numeric taste models are great at *recall*
+(don't miss anything plausibly relevant) and terrible at *precision on intent* ("mentions
+politics" vs. "is about politics"); a reading judge is the reverse. So the seeds do recall,
+the judge does precision, and each is tuned in the medium it understands — papers for one,
+prose for the other.
+
+## Seeds (the Gathering profile)
+
+- Taste is defined entirely by a flat list of DOIs (`seeds.txt`), all at equal weight.
+  Seeds can be raw DOIs or pasted citations (resolved via Crossref; low-confidence matches
+  are flagged). Lines starting with `#` are comments.
+- A Zotero library can act as a live seed source. The sync is **append-only with a ledger**:
+  adding to Zotero adds a seed; removing from Zotero never removes one; manual deletions
+  from `seeds.txt` are never undone. Only scholarly item types sync; DOI-less items are
+  resolved via Crossref only at match score ≥ 70.
+
+From the seeds, a fully rebuildable profile is derived (nothing hand-maintained):
+
+- **Concept tags**: each seed's OpenAlex concepts with score ≥ 0.3, excluding level 0–1 root
+  concepts ("Political science", "Artificial intelligence" — they match everything). Keep
+  the ~40 globally strongest, then union in each seed's top 2 so a small, newly added topic
+  is guaranteed to register.
 - **Auto-trusted venues**: any journal holding ≥ 2 seeds is trusted automatically, on top of
-  a hand-curated starting list. The list grows itself as seeds grow.
+  a configurable starting list.
 - **Seed authors** are recorded; their new papers get a quality bonus.
-- **Seed embeddings**: each seed's title + abstract (truncated to 2,000 chars) is embedded
-  once and cached.
-- **Topic clusters**: seed embeddings are grouped by spherical k-means into ~10 clusters
-  (fixed random seed). Labels come from the most common content words in member titles, and
-  a rebuilt cluster **inherits its old label** when member overlap (Jaccard) ≥ 0.4 — so
-  topic weights and archive tags survive profile rebuilds. Clusters larger than ~13 seeds
-  are subdivided into 2–3 sub-angles so a big topic is represented by its specific
-  sub-interests, not its vague common theme.
-- **Interest statements**: for each cluster (and each sub-angle), the LLM reads the member
-  seeds and writes **2–3 sentences naming the mechanism/purpose that unites them** — not the
-  surface topic ("narrative as a mechanism of persuasion", not "narrative") — plus the
-  recurring methods, populations, or settings. These are regenerated on every profile
-  rebuild and become the reranker's queries, so they are the one place the seeds' taste is
-  verbalized; the extra sentences exist to carry more of that specificity.
-- **Retrieval concepts**: the concept list used for harvesting guarantees **one distinct
-  concept per cluster (and per sub-angle)** before filling remaining slots by global
-  weight — otherwise small topics were never even fetched, and no amount of scoring could
-  surface them.
+- **Seed embeddings**: each seed's title + abstract embedded once and cached.
+- **Topic clusters**: seed embeddings grouped by spherical k-means into ~10 clusters (fixed
+  random seed). Labels come from common title words; a rebuilt cluster inherits its old
+  label when member overlap is high, so dashboard topic weights survive rebuilds. These
+  clusters are what the dashboard's **Gathering** page shows.
+- **Retrieval concepts**: the harvest list guarantees one distinct concept per cluster
+  before filling remaining slots by global weight — otherwise small topics were never even
+  fetched, and no amount of scoring could surface them.
 
-## Gathering
+## Gathering (the daily harvest)
 
-- Three complementary sources each morning:
-  - **OpenAlex**: one query per retrieval concept (22 concepts), `type:article`, sorted
-    newest-first, **cursor-paged up to 3,500 works per concept** (200 per page). Deep paging
-    matters: broad concepts hold thousands of papers in a 14-day window ("Narrative" ~5k,
-    "Social media" ~2.7k when measured), and a paper OpenAlex indexes several days after its
-    print date sits far down the newest-first list — a shallow cap silently truncates
-    exactly the late-indexed papers the wide window exists to catch.
-  - **arXiv**: the 120 newest preprints across the configured categories.
-  - **Semantic Scholar recommendations**: "papers similar to" the seed set, using **all**
-    seeds as positive examples (an even spread of 100 when there are more — using only the
-    first N starved recently added seeds).
-- **Rolling 14-day window, re-scanned every day.** Databases index papers 2–5 days after
-  their publication date; a wide window re-scanned daily catches late-indexed papers, and
-  the no-repeat ledger (below) makes the overlap harmless. It also lets a strong paper that
-  missed the cut on a busy day keep re-competing.
-- The wide window is affordable because **candidate embeddings are cached per paper**
-  (35-day TTL, half-precision packed) — each paper is embedded exactly once, ever, so a day's
-  marginal cost is only the genuinely new papers.
-- API etiquette: a `mailto` identifier on OpenAlex/Crossref/Unpaywall calls (their "polite
-  pool"), short sleeps between requests, and retries with backoff. Every network step is
-  best-effort — a source failing degrades the run, never kills it.
+- Complementary sources each morning: **OpenAlex** (one query per retrieval concept,
+  newest-first, **cursor-paged up to 3,500 works per concept** — deep paging matters because
+  broad concepts hold thousands of papers in a two-week window and late-indexed papers sit
+  far down the list), **arXiv** (newest preprints in your configured categories), **OSF
+  preprint servers** (e.g. SocArXiv, PsyArXiv), and **Semantic Scholar recommendations**
+  ("papers similar to" the seed set).
+- **Rolling 14-day window, re-scanned every day.** Databases index papers 2–5 days late; a
+  wide window re-scanned daily catches them, and the no-repeat ledger makes overlap
+  harmless. A strong paper that misses the cut on a busy day keeps re-competing.
+- Affordable because **every paper is embedded exactly once, ever** (cached with a 35-day
+  TTL, half-precision packed). Each cache entry also records whether the paper had an
+  abstract when embedded: a paper first seen title-only is **re-embedded once its abstract
+  arrives**, so stale title-only vectors never linger.
+- API etiquette: a `mailto` identifier for OpenAlex/Crossref/Unpaywall's "polite pool,"
+  sleeps between requests, retries with backoff. Every network step is best-effort — a
+  source failing degrades the run, never kills it.
 
 ## Filtering (before ranking)
 
-- Keep only OpenAlex types `article` / `preprint` / `posted-content`.
-- Drop noise by title: front-matter, corrigenda, errata, editorials, "review for…", indexes,
-  and any title under 4 words.
-- Drop records dated more than 90 days in the future (bad metadata); a modest future print
-  date is legitimate advance access and is kept.
-- **Dedupe** on DOI, falling back to a normalized title slug; when duplicates carry
-  different metadata, prefer the record that has an abstract.
-- **No-repeat ledger** (`seen.json`): every paper ever shown is recorded (180-day TTL) and
-  excluded from future runs. This is what makes the wide rolling window safe, and it makes
-  "show me more" trivial — a rerun naturally surfaces the next-best papers.
-- Anything the user has 👎'd is hard-dropped by DOI/title before scoring.
+- Keep only article/preprint/posted-content types; drop front-matter, corrigenda,
+  editorials, book reviews, and titles under 4 words; drop records dated more than 90 days
+  in the future (bad metadata) while keeping modest advance-access dates.
+- **Dedupe** on DOI (falling back to a title slug), preferring the record with an abstract.
+- **Abstracts are never truncated mid-sentence**: sources are capped only at a pathological
+  bound (8,000 chars, cut at a sentence end) because some records ship entire papers as the
+  "abstract" field.
+- **No-repeat ledger** (`seen.json`, 180-day TTL): every paper ever shown is excluded from
+  future runs. This is what makes the wide rolling window safe.
+- Anything you've 👎'd is hard-dropped before scoring.
 
-## Ranking
+## Ranking stage 1 — embedding relevance (the prefilter)
 
-Relevance is judged in two passes, then blended with quality and recency. The split exists
-because the two techniques fail in opposite ways. Pass 1 compares embedding vectors — cheap
-enough to score the entire pool (thousands of papers) and lossless about the seeds (each
-candidate is compared against the actual seed vectors, never a verbal summary), but a
-bi-encoder can only say "about the same stuff"; it can't tell *narrative used to persuade*
-from *narrative studied in nursing education*. Pass 2 is a cross-encoder that reads a
-candidate **together with** a statement of the interest and judges contextual fit — exactly
-the angle/mechanism distinction pass 1 misses — but it's too expensive for the whole pool
-and needs text queries. So: pass 1 does recall over everything and nominates a shortlist;
-pass 2 does precision on the shortlist; the final relevance averages the two so neither
-judgment alone can bury or crown a paper.
+Every candidate is compared against the positive examples (seeds + 👍'd papers):
 
-**Pass 1 — embedding relevance** (each candidate vs. the positive examples = seeds + 👍'd
-papers):
+- Similarity to the **nearest k=3** positives, not the centroid — a paper close to one small
+  seed cluster scores high even if it's far from everything else.
+- **Contrastive correction**: subtract 0.3 × the candidate's similarity to *the day's
+  average paper*. "Generic" should mean "generic," not "central to your interests" — an
+  earlier version subtracted mean similarity to all seeds, which taxed papers at the very
+  center of the taste profile; measured against blind-rated papers, the pool baseline put
+  every top-rated paper comfortably inside the judge's queue while the seeds baseline
+  dropped some out.
+- **Dislike penalty**: a candidate closer to a 👎'd paper than to the likes is pushed down.
+- Normalized across the day's pool (10th percentile → 0, max → 1) so the top papers keep
+  distinct scores.
+- Fallbacks: concept-tag overlap when no embedding is available; a Semantic Scholar
+  recommendation gets a small additive bonus (an earlier hard floor could override the
+  semantic verdict — floors that bypass a veto are a recurring bug class).
 
-- Similarity to the **nearest k=3** positives, not the centroid — so a paper close to one
-  small seed cluster scores high even if it's far from everything else (cluster-aware by
-  construction).
-- **Contrastive correction**: subtract 0.3 × the mean similarity to *all* positives. A paper
-  that is only generically close to everything scores below one specifically close to a few
-  seeds.
-- **Dislike penalty**: if a candidate is closer to a 👎'd paper than to the likes, subtract
-  0.5 × the excess.
-- Normalize across the day's pool: 10th percentile → 0, actual maximum → 1, so the top few
-  papers keep distinct scores instead of all pinning at 1.0.
-- Fallback when no embedding is available (no abstract, or the embedding service is down):
-  weighted concept-tag overlap, saturating at ~3 strong concept matches.
-- A Semantic Scholar recommendation gets a relevance floor of 0.7 (it was already judged
-  similar to the seeds).
+**This pass's only job is recall.** Its score decides who the judge reads, and it remains
+the value the quality gates test — but for judged papers it no longer decides the ranking.
 
-**Pass 2 — cross-encoder rerank** of the top 200 by embedding relevance:
+## Ranking stage 2 — the LLM judge (Selection)
 
-- Each shortlisted candidate is judged against every interest statement (the 2–3 sentence
-  cluster distillations); take the **max** over statements — a paper only needs to fit one
-  interest, not all of them. For subdivided topics, only the specific sub-angle statements
-  are used — the vague umbrella statement is dropped, so a generically on-topic paper can't
-  ride in on the broad theme.
-- Final relevance = **0.5 × embedding score + 0.5 × reranker score** (an even blend, so the
-  direct-to-seeds vector judgment and the statement-mediated fit judgment count equally).
-  Reranking the top 200 (not just the final top-N) means a paper that would sneak in via
-  recency/quality still gets the "is this actually on-topic?" check.
+The top ~1,000 abstract-bearing candidates by embedding relevance — plus two side channels:
+the top few hundred by provisional overall score (so a paper riding venue quality still gets
+read) and the nearest ~100 to *each flavor's description* (so a flavor your seeds cover
+thinly still competes) — are each **read** by the chat LLM against your Selection Criteria.
 
-**Quality** (0–1):
+- The prompt contains your core statement, your flavors, your not-interested list, your
+  example titles, and your **most recent 👍/👎 votes** as boundary examples. The judge
+  returns strict JSON: which flavors the paper substantively engages, a fit score 0–10, and
+  a one-sentence reason. Temperature 0.
+- The rubric treats **each flavor as already an intersection** ("LLMs for persuasion
+  online," not "LLMs" + "persuasion" + "online"): a paper squarely inside ONE flavor is a
+  bullseye (9–10); engaging a second flavor adds the tenth point; competent work on a mere
+  *component* of a flavor caps around 4–6. This matters: rubrics that count matched topics
+  let a mediocre three-topic paper outrank a brilliant two-topic one.
+- For judged papers, **relevance = fit/10**, and the verdict (score, flavors, reason) is
+  attached to the paper — it becomes the chip on the dashboard card and the *Fit* line in
+  the briefing, so every pick is auditable.
+- **Verdicts are cached per paper per profile version.** Each paper is judged once, ever;
+  the daily cost is only what's new. Editing your criteria bumps the profile version
+  (a date + content hash), which invalidates the cache — the next run re-judges the whole
+  window under your new wording. That's the tuning loop: edit a paragraph, see the
+  boundary move tomorrow.
 
-- Tiers: prestige venues (Nature/Science/APSR-class; matched by name or name-prefix so the
-  whole Nature family counts) = 0.9; the user's trusted venues = 0.7. Venue matching is
-  **equality or "name: subtitle"** after stripping a leading "The " — never substring, which
-  produced false matches.
-- **Sliding impact scale** on top of the tiers: OpenAlex's free per-journal
-  `2yr_mean_citedness` (≈ impact factor) is mapped log-scale onto 0–0.85
-  (IF≈2 → ~0.31, 5 → ~0.50, 10 → ~0.67, 20+ → 0.85); final venue quality =
-  max(tier, impact). A strong journal in neither list still gets credit; the personal lists
-  remain a floor. Stats are batch-fetched and cached 90 days.
-- A returning seed author adds +0.3. Total capped at 1.0.
+*Why a judge and not a cross-encoder reranker?* The earlier design scored the shortlist
+with a cross-encoder against auto-written interest statements. Measured on a 15,000-paper
+pool, its scores turned out to be nearly **query-invariant** — a robotics paper scored 0.96
+against "political discourse" — so it discriminated documents, not fit. In a blind rating
+test, the judge's top-5 scored perfectly with the user while the cross-encoder pipeline's
+did not. The judge costs a few hundred small chat calls a day (cached), replaces the
+reranker entirely, and its one-sentence rationales double as the interface. (The legacy
+reranker code remains only for the offline diagnostic scripts.)
 
-**Recency**: linear decay over 14 days; a future (advance-access) date clamps to
-maximally fresh, never above 1.0.
+## Quality, recency, gates, final score
 
-**Blend**: score = 0.50 × relevance + 0.35 × quality + 0.15 × recency (configurable).
+- **Quality (0–1)**: prestige venues (Nature/Science-class, matched by name or prefix,
+  never substring) = 0.9; your trusted venues = 0.7; on top of the tiers, OpenAlex's free
+  per-journal citation stats slide any strong journal up a log scale (IF≈2 → ~0.31,
+  10 → ~0.67, 20+ → 0.85); a returning seed author adds +0.3; capped at 1.0.
+- **Recency: weight 0 by design.** The 14-day window already enforces freshness; a scored
+  recency term mostly penalized good papers the databases indexed late.
+- **Final score = 0.73 × relevance + 0.27 × quality** (configurable), then multiplicative
+  **gates**: non-journal formats and (optionally) papers from outside a preferred-country
+  list need strong topical fit to escape a heavy penalty. The gates test the *pre-judge
+  embedding relevance* — a stable scale that doesn't shift when the judge or its profile
+  changes. Dashboard per-topic ± weights apply last, as deliberately mild nudges.
 
-**Gates** (multiplicative penalties escaped only by strong topical fit):
+## Selection of the day's briefing (the abstract gate + watchlist)
 
-- **Type gate**: journal articles and preprints (arXiv exempt from penalty) are the default
-  diet. Proceedings/conference papers, repository working papers, and book reviews take a
-  ×0.75 haircut when relevance ≥ 0.85 and ×0.40 below it — effectively vanishing unless
-  really well aligned.
-- **Geo gate**: papers whose author affiliations are *entirely* outside a preferred-country
-  list need relevance ≥ 0.90 or take ×0.55. Papers with unknown affiliations (arXiv, S2
-  recs) pass untouched. Set the list empty to disable.
-- **Topic weights**: per-topic ± multipliers from the dashboard, deliberately mild nudges
-  applied to the final score.
+- Surface the top 5 per day (configurable), but **only papers with an abstract** — the only
+  real content available at scoring time. A title-only record inflates every scoring method
+  (measured: a cross-encoder once scored an astrophysics paper ~0.93 on every topic from
+  its title alone), so title-only papers are never shown on a guess.
+- A strong candidate with no abstract is **held on a watchlist** instead of shown or lost —
+  advance-access papers are often listed days before their abstract is deposited. Held
+  papers are re-checked daily and re-enter competition the moment the abstract appears
+  (their cached title-only embedding is evicted so they're re-embedded with real content).
+  The display scans past held papers so an abstract-less paper never costs you a slot.
 
-## Selection (the abstract gate + watchlist)
-
-- Surface the top 5 per day (configurable), but **only papers with real content**: an
-  abstract, or open-access full text that *actually downloads* — verified by performing the
-  real fetch, not by trusting that an OA URL is listed (listed-but-dead links were showing
-  empty stubs).
-- Scan down the ranking (up to 40 deep) until the slots are filled.
-- A strong candidate with no abstract and no fetchable full text is **held on a watchlist**
-  instead of shown or lost — advance-access papers are often listed days before their
-  abstract is deposited. Held papers are re-checked daily (capped at 60 lookups/run,
-  30-day TTL) and **re-injected to compete the moment the abstract appears**. Status
-  tracking (held/ready/done/expired) gives real backfill-rate stats.
-- Shown papers are recorded in the ledger at selection time.
-
-## Writing (LLM-agnostic prompt decisions)
+## Writing (the briefing itself)
 
 - Summaries are pitched at a one-sentence **audience statement** kept in config.
-- Fixed structure per paper: background/question → method → concrete results → why it
-  matters, as flowing prose, ~300–450 words.
+- **Two length regimes, chosen by what the model actually read.** If only the abstract is
+  available, the entry is a plain-English restatement at roughly the abstract's own length
+  (~100–180 words) — summarizing an abstract at 400 words is inflation, not information.
+  Only when open-access full text was actually fetched and read does the entry run full
+  depth (300–450 words: question → method → concrete results → why it matters). Full text
+  is retrievable for roughly a third to a half of picks (arXiv PDF → Unpaywall → the
+  record's own OA link; landing-page stubs are sniffed out and rejected).
 - **Grounding rules are explicit in the prompt**: never invent methods, Ns, numbers, or
-  effect sizes; when the abstract omits them, say so plainly; a paper with no abstract gets
-  at most a short, labeled 1–2 paragraph entry. A shorter honest entry beats a longer
-  speculative one.
-- **Full text when available**: before writing, open-access full text is fetched (routes in
-  order: arXiv PDF → Unpaywall best OA location → the record's own OA URL; content sniffed
-  by magic bytes, HTML under 15 KB rejected as a landing/paywall stub, 30 MB cap). Entries
-  grounded in full text may run up to ~75% longer, but only when the paper genuinely
-  contains extra insight — never padded.
-- **Date honesty**: advance-access records carry future print dates; those are cited as
-  "in press" with the online date, never presented as published-on-a-future-date.
-- Every entry must link to the real article (doi.org, else the OA URL) — the standing
-  defense against summary hallucination.
-- Papers are ordered best-first; if fewer than the quota clear the bar, fewer are shown.
-- The dashboard cards reuse the briefing's summaries **verbatim** so PDF and dashboard never
+  effect sizes; when the abstract omits them, say so plainly. A shorter honest entry beats
+  a longer speculative one.
+- Each entry carries its judge verdict (*Fit: 9/10 · the flavors it engages*), the real
+  link (DOI or OA URL), and — under the summary — the paper's actual abstract, whole.
+- **Date honesty**: advance-access records are cited as "in press" with the online date.
+- The dashboard cards reuse the briefing's summaries verbatim, so PDF and dashboard never
   disagree.
 
-## Feedback loop
+## Feedback loops (three of them)
 
-- Deliberately **asymmetric**: 👍 adds a positive example (acts as a bonus seed in the
-  embedding relevance pass); 👎 hard-drops that paper forever and only gently nudges down
-  its embedding neighborhood. Upvotes add signal; downvotes mostly just remove.
-- Voted papers' embeddings are computed once and cached.
+- **Votes.** 👍 adds a positive example to the embedding pass AND appears in the judge's
+  prompt as a recent example; 👎 hard-drops that paper forever, nudges down its embedding
+  neighborhood, and appears in the judge's prompt as a rejection. Votes are deliberately
+  the cheapest feedback: one click teaches both stages.
+- **Downvote-cluster alert.** If several recent 👎s land nearest the *same* flavor, the
+  radar says so — a banner on the dashboard and a note in the briefing suggesting a
+  criteria edit, with an LLM one-liner naming what the rejected papers have in common. It
+  re-fires daily while the pattern holds and clears itself when the evidence ages out.
+- **Coverage audit (Gathering ↔ Selection drift).** The two stages can silently diverge:
+  add seeds for a new project and Gathering adapts automatically, but the judge will veto
+  the new area until your criteria mention it. So after each profile rebuild, every seed
+  cluster's centroid is compared against the flavor descriptions; a sizable cluster no
+  flavor covers triggers a **proposal** — an LLM-drafted flavor built from that cluster's
+  papers, shown on the dashboard (accept prefills the form; you still review and save;
+  dismiss is remembered) and noted in the briefing email until resolved. Proposals persist
+  until acted on; they cannot be missed by being away for a few days.
 
 ## Timing & operational mechanics
 
-- One cron run early each morning (before the workday). Exact time is uncritical **by
-  design**: the rolling window + no-repeat ledger decouple correctness from when the job
-  fires or whether a day is missed — a skipped day's papers are still in-window tomorrow.
-- Fixed run order: Zotero seed sync → harvest/rank/select → full-text fetch → LLM writes
-  the briefing → dashboard data build → PDF + email.
-- Every stage after harvest is **best-effort with graceful degradation**: embeddings down →
-  concept-tag relevance; reranker down → embedding relevance stands; full text unfetchable →
-  abstract-grounded summary; Zotero unconfigured → skipped. The briefing still goes out.
-- All state (profile, clusters, interest statements, caches, ledgers, watchlist) is
-  **rebuildable from `seeds.txt` + one command**, so state files are disposable and never
-  precious.
-- All tunables live in one commented config file; scripts read them from there rather than
-  hardcoding.
+- One cron run early each morning. Exact time is uncritical **by design**: the rolling
+  window + no-repeat ledger decouple correctness from when the job fires — a skipped day's
+  papers are still in-window tomorrow.
+- Fixed run order: Zotero seed sync → harvest/rank/judge/select → full-text fetch → LLM
+  writes the briefing → dashboard data build → PDF + email.
+- Every stage is **best-effort with graceful degradation**: embeddings down → concept-tag
+  relevance; judge unreachable → embedding relevance stands; full text unfetchable →
+  short abstract-grounded summary; Zotero unconfigured → skipped. The briefing still goes
+  out.
+- All state (profile, clusters, caches, ledgers, watchlist, judge verdicts) is
+  **rebuildable from `seeds.txt` + `interest_profile.json` + one command** — state files
+  are disposable, never precious.
+- All tunables live in one commented `config.toml`; your criteria live in
+  `interest_profile.json` (or the dashboard's Selection Criteria page, same thing).

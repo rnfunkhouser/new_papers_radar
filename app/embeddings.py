@@ -1,35 +1,36 @@
 #!/usr/bin/env python3
 """
-embeddings.py — semantic embeddings via MindRouter (UIdaho campus LLM gateway).
+embeddings.py — semantic embeddings + chat via any OpenAI-compatible API endpoint
+(OpenAI itself, a campus gateway, a local server such as vLLM/Ollama/LM Studio...).
 
-Pure standard library (urllib): the /v1/embeddings endpoint is OpenAI-compatible, so
-no `openai` package or other pip dependency is needed — matching the rest of this project.
+Configured by llm_api.json next to this file (copy llm_api.json.example). Pure
+standard library (urllib): the /v1/embeddings and /v1/chat/completions endpoints
+follow the OpenAI wire format, so no `openai` package or other pip dependency is
+needed — matching the rest of this project.
 
 Used to score a candidate paper by how close its abstract sits to your *nearest* seed
-papers (cosine similarity). That is inherently cluster-aware: a paper in a small niche of
-your interests scores high because it is close to that niche's few seeds, no matter how many
-seeds you have in other areas — which fixes the "big topic drowns out a small one" problem
-that plain concept-tag counting suffered.
+papers (cosine similarity). That is inherently cluster-aware: a great bot-persuasion paper
+is close to your bot-persuasion seeds no matter how many narrative seeds you have — which
+fixes the "big topic drowns out a small one" problem that concept-tag counting suffered.
 
-Everything here is best-effort: if MindRouter is unreachable (e.g. off the campus VPN at
-5:57am), embed() raises EmbeddingsUnavailable and the harvester falls back to tag scoring.
+Everything here is best-effort: if the API is unreachable or unconfigured, embed()
+raises EmbeddingsUnavailable and the harvester falls back to tag scoring.
 """
 
 import json, math, ssl, urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).parent
-CFG = HERE / "mindrouter.json"
+CFG = HERE / "llm_api.json"
 CACHE = HERE / "seeds_embeddings.json"     # {doi: vector} for seeds, so we embed each seed once
 DOC_CACHE = HERE / "doc_embeddings.json"   # {key: [iso_first_seen, packed_f16_vector]} for
                                            # CANDIDATE papers, so each is embedded once ever
                                            # (not re-embedded every day it sits in the window)
 DOC_CACHE_TTL_DAYS = 35                     # drop cached vectors older than this (window is ~21d)
-DEFAULT_MODEL = "Qwen/Qwen3-Embedding-8B"
 
 
 class EmbeddingsUnavailable(Exception):
-    """Raised when MindRouter can't be reached or isn't configured. Caller falls back."""
+    """Raised when the LLM API can't be reached or isn't configured. Caller falls back."""
 
 
 def _ssl_ctx():
@@ -55,14 +56,14 @@ def _config():
 
 
 def available():
-    """True if a usable mindrouter.json exists (does NOT prove the network is up)."""
+    """True if a usable llm_api.json exists (does NOT prove the network is up)."""
     return _config() is not None
 
 
 def _get(path, timeout=30):
     cfg = _config()
     if not cfg:
-        raise EmbeddingsUnavailable("mindrouter.json missing or has no api_key")
+        raise EmbeddingsUnavailable("llm_api.json missing or has no api_key")
     req = urllib.request.Request(
         cfg["base_url"].rstrip("/") + path,
         headers={"Authorization": f"Bearer {cfg['api_key'].strip()}"})
@@ -74,8 +75,8 @@ def _get(path, timeout=30):
 
 
 def list_models():
-    """Return {id: model_dict} from GET /v1/models. MindRouter does EXACT name matching
-    (no aliases) and the admin 'default model' is chat-UI-only, so we resolve client-side."""
+    """Return {id: model_dict} from GET /v1/models. Model names are matched EXACTLY
+    against this live catalog (no aliases), so we resolve the chat model client-side."""
     data = _get("/models")
     return {m["id"]: m for m in data.get("data", []) if m.get("id")}
 
@@ -83,34 +84,39 @@ def list_models():
 _RESOLVED_CHAT = None       # cache within a run so we log/resolve once
 
 def resolve_chat_model(cfg=None):
-    """Pick the chat model for the writing step. If config pins a literal name, use it.
-    Otherwise walk an ordered preference list and return the first present in the LIVE
-    catalog; if none match, fall back to the largest chat-capable model. This keeps a
-    decommissioned model from silently breaking the daily run. Cached per process."""
+    """Pick the chat model for the writing/judging steps. If llm_api.json pins a
+    literal name ("chat_model"), use it. Otherwise walk the ordered preference list in
+    "chat_models" and return the first present in the LIVE catalog; if none match (or no
+    list is given), fall back to the largest chat-capable model the catalog reports. This
+    keeps a decommissioned model from silently breaking the daily run. Cached per
+    process. If nothing can be resolved, raises with a pointer to llm_api.json."""
     global _RESOLVED_CHAT
     if _RESOLVED_CHAT:
         return _RESOLVED_CHAT
     cfg = cfg or _config() or {}
     pinned = cfg.get("chat_model")
-    prefs = cfg.get("chat_models") or [
-        "openai/gpt-oss-120b", "qwen/qwen3.5-122b", "Nemotron-3-Super-120b",
-        "google/gemma-4-31b", "default-llm-large", "default-llm"]
+    prefs = cfg.get("chat_models") or []
     if pinned and pinned != "auto":
         _RESOLVED_CHAT = pinned
         return pinned
-    catalog = list_models()
-    for name in prefs:
-        if name in catalog:
-            _RESOLVED_CHAT = name
-            return name
-    # last resort: largest non-embedding, non-reranker chat model by parameter_count
-    chat = [(m.get("parameter_count") or 0, mid) for mid, m in catalog.items()
-            if not m.get("capabilities", {}).get("embeddings")
-            and "rerank" not in mid.lower()]
-    if not chat:
-        raise EmbeddingsUnavailable("no chat-capable model found in catalog")
-    _RESOLVED_CHAT = max(chat)[1]
-    return _RESOLVED_CHAT
+    try:
+        catalog = list_models()
+        for name in prefs:
+            if name in catalog:
+                _RESOLVED_CHAT = name
+                return name
+        # last resort: largest non-embedding, non-reranker chat model by parameter_count
+        chat = [(m.get("parameter_count") or 0, mid) for mid, m in catalog.items()
+                if not m.get("capabilities", {}).get("embeddings")
+                and "rerank" not in mid.lower()]
+        if not chat:
+            raise EmbeddingsUnavailable("no chat-capable model found in catalog")
+        _RESOLVED_CHAT = max(chat)[1]
+        return _RESOLVED_CHAT
+    except EmbeddingsUnavailable as e:
+        raise EmbeddingsUnavailable(
+            f'could not auto-resolve a chat model ({e}) — set "chat_model" '
+            '(or a "chat_models" preference list) in llm_api.json')
 
 
 def embed(texts, batch_size=64, timeout=120):
@@ -118,10 +124,14 @@ def embed(texts, batch_size=64, timeout=120):
     request count low. Raises EmbeddingsUnavailable on any config/network/HTTP failure."""
     cfg = _config()
     if not cfg:
-        raise EmbeddingsUnavailable("mindrouter.json missing or has no api_key")
+        raise EmbeddingsUnavailable("llm_api.json missing or has no api_key")
     base = cfg["base_url"].rstrip("/")
     key = cfg["api_key"].strip()
-    model = cfg.get("embedding_model") or DEFAULT_MODEL
+    model = cfg.get("embedding_model")
+    if not model:
+        raise EmbeddingsUnavailable(
+            'no "embedding_model" set in llm_api.json — add the name of an embedding '
+            'model your provider serves (e.g. "text-embedding-3-large" on OpenAI)')
     ctx = _ssl_ctx()
     out = []
     for i in range(0, len(texts), batch_size):
@@ -145,7 +155,7 @@ def embed(texts, batch_size=64, timeout=120):
 def _post(path, payload, timeout=180):
     cfg = _config()
     if not cfg:
-        raise EmbeddingsUnavailable("mindrouter.json missing or has no api_key")
+        raise EmbeddingsUnavailable("llm_api.json missing or has no api_key")
     base = cfg["base_url"].rstrip("/")
     body = json.dumps(payload).encode()
     req = urllib.request.Request(
@@ -160,7 +170,7 @@ def _post(path, payload, timeout=180):
 
 
 def chat(system, user, model=None, temperature=0.4):
-    """One MindRouter chat call. model=None resolves via resolve_chat_model(). gpt-oss/
+    """One chat-completion call. model=None resolves via resolve_chat_model(). Some
     reasoning models put output in reasoning_content with null content — read both.
     Raises EmbeddingsUnavailable on failure."""
     if model is None:
@@ -173,9 +183,18 @@ def chat(system, user, model=None, temperature=0.4):
     return (msg.get("content") or msg.get("reasoning_content") or "").strip()
 
 
-def rerank(query, documents, model="Qwen/Qwen3-Reranker-8B", batch=64):
+def rerank(query, documents, model=None, batch=64):
     """Cross-encoder relevance of each document to the query -> list of floats [0,1],
-    same order as documents. Much sharper contextual fit than cosine similarity."""
+    same order as documents. LEGACY: used only by the diagnostics scripts
+    (rank_report.py / diagnose_paper.py) — the daily pipeline no longer needs it.
+    Requires a provider that serves a /rerank endpoint (many, including OpenAI,
+    do NOT) and a "rerank_model" entry in llm_api.json."""
+    if model is None:
+        model = (_config() or {}).get("rerank_model")
+    if not model:
+        raise EmbeddingsUnavailable(
+            'no "rerank_model" set in llm_api.json — rerank() is legacy/diagnostic '
+            'only and needs a provider with a /rerank endpoint')
     scores = [0.0] * len(documents)
     for i in range(0, len(documents), batch):
         chunk = documents[i:i + batch]

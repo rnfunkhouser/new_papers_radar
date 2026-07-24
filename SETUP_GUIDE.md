@@ -5,94 +5,80 @@ hand-picked, well-written briefing of new papers every morning. Every step is sp
 and technical terms are explained the first time they appear.
 
 Take it slowly. You do **not** have to finish in one sitting; there are natural stopping
-points, and one early step (requesting a campus computer) involves a wait, so it's normal to
-spread this over a few days.
+points, and arranging your always-on machine may involve a wait, so it's normal to spread
+this over a few days.
 
 ---
 
 ## What you'll end up with
 
 - **A 6:00-ish a.m. email**, every day, with a PDF of the ~5 best new papers in your area,
-  each summarized in a few tight paragraphs (question → method → findings → why it matters).
-- **A web dashboard** where you can browse the archive, search past briefings, and click
-  👍 / 👎 on papers — which quietly teaches the radar your taste over time.
+  each with an honest summary (short and plain when only the abstract is available; full
+  depth when the open-access text could be read).
+- **A web dashboard** where you can browse the archive, search past briefings, click
+  👍 / 👎 on papers, and — importantly — **edit the plain-English description of your
+  interests** that the radar judges every paper against.
 - It all runs **by itself** once set up. You just read your email.
 
 ## How it decides what to show you
 
-You give it a list of **papers you already love** (your "seeds"). It studies them and, each
-morning, goes looking for brand-new papers that resemble them. The more representative your
-seed list, the better it gets. That's the whole idea — you never maintain keywords.
+Two stages, and it helps to know their names because the dashboard uses them:
+
+1. **Gathering** — you give it a list of **papers you already love** (your "seeds"). It
+   studies them and, each morning, casts a wide net: thousands of brand-new papers from the
+   areas your seeds live in.
+2. **Selection** — an LLM then *reads* each shortlisted paper against your **Selection
+   Criteria**: a page of plain English, written by you, describing what you actually care
+   about (and what you don't). It scores each paper's fit 0–10, and the top scorers make
+   your briefing — each with a visible score and the interest area it matched.
+
+Seeds cast the net; your written criteria make the call. You tune the first by adding
+papers, and the second by editing a paragraph.
 
 ---
 
-## The big picture: what you're setting up
+## What you need (the two real requirements)
 
-There are two "computers" involved:
+**1. An LLM API.** The "smart" parts — understanding what papers mean, judging fit against
+your criteria, writing the summaries — run on a language-model service that this app calls
+over the internet. Any **OpenAI-compatible endpoint** that provides *embeddings* and *chat*
+works. The most common path is simply an [OpenAI](https://platform.openai.com) account and
+API key: you'd create a key, put it (plus your chosen embedding and chat model names) in one
+small config file, and at this app's usage the bill is typically **a few dollars a month**
+(the first day costs the most while it scores a backlog; after that it only pays for what's
+new each morning). I haven't run the OpenAI path myself — I use a free campus gateway — so
+rather than hand you steps I haven't verified: **the fastest way to get connected is to open
+this project in an AI coding assistant** (Claude Code, Cursor, Copilot Workspace, etc.) and
+ask it to hook up your provider. The file [`app/AGENTS.md`](app/AGENTS.md) contains exact
+instructions written for your AI tool — it knows what to do from there. Self-hosted and
+campus-hosted OpenAI-compatible servers work the same way.
 
-1. **Your own laptop/desktop** — where you get the code, list your seed papers, and do a
-   first test run.
-2. **A small "always-on" campus computer** (a *virtual machine*, or **VM**) — where the radar
-   actually lives so it can run every morning whether or not your laptop is on. You **request
-   this from the university** (details below). This is the recommended setup.
+**2. An always-on machine.** The radar needs a computer that's awake at ~6 a.m. every day.
+In order of niceness:
+- **A small Linux virtual machine (VM) from your institution** — most universities'
+  research-computing groups will provision one on request (a couple of CPUs and a few GB of
+  RAM is plenty; it needs to run Docker, allow SSH, and ideally have a web address pointed
+  at port 8001 so you can open your dashboard from anywhere).
+- **A small cloud VM** (AWS/Azure/GCP/DigitalOcean and friends, ~$5–10/month) — same specs.
+- **A Mac you leave on and awake** — simplest to start, least reliable (no briefing on days
+  it's asleep). Covered at the end under *Alternative: run it on an always-on Mac*.
 
-> **If you'd rather not use a campus VM:** you can instead run everything on a Mac that you
-> leave on and awake every morning. That path is simpler to start but less reliable (no email
-> on days the Mac is asleep). It's described at the end under *Alternative: run it on an
-> always-on Mac*. Most people should use the VM.
+> **🎓 For my colleagues at the University of Idaho:** you can use the **MindRouter** API to
+> connect this app to the university's locally hosted LLMs at **no cost**, and **RCDS** can
+> set up a virtual machine that can host the app and a URL-accessible dashboard. Email RCDS
+> to request a small Docker-capable Linux VM with SSH access, a web address pointed at port
+> 8001, and a MindRouter API key — then use MindRouter's URL and key in `llm_api.json` in
+> step A5.
 
----
-
-## ⏱️ Do this FIRST (it has a wait): request your campus computer
-
-The radar runs on a small campus **virtual machine (VM)** — think of it as a computer that
-lives in a university data center and is always on. You also need a **web address (URL)** so
-you can open the dashboard in your browser. Both come from the university's **Research
-Computing & Data Services (RCDS)** team.
-
-**Email RCDS** (their address is `rcds` at `uidaho` dot `edu` — written that way here only to
-dodge email scrapers) and ask for the following. Here is wording you can adapt:
-
-> Subject: Request for a small Linux VM for a daily research tool
->
-> Hi RCDS,
->
-> I'd like to run a small, always-on personal tool that emails me a daily summary of new
-> academic papers. Could you help me set up:
->
-> 1. A small Linux virtual machine (a couple of CPUs and a few GB of RAM is plenty) that can
->    run **Docker**.
-> 2. **SSH access** to it (I'll need to connect from my laptop), including help creating and
->    installing my **SSH key**.
-> 3. A **web address (URL)** pointed at the machine's port **8001**, so I can open a small
->    dashboard it serves (a campus reverse proxy is fine — it does not need to be public to
->    the whole internet).
-> 4. Confirmation that the machine can reach **`mindrouter.uidaho.edu`** (the campus AI
->    gateway) and send email via Gmail's SMTP (port 587), and that outbound access to public
->    scholarly APIs (OpenAlex, arXiv, Crossref, Semantic Scholar, Unpaywall) is allowed.
->
-> Thanks!
-
-**Why now?** Provisioning a machine and setting up access can take days, and it may involve a
-back-and-forth. Start this email today; you can do all the laptop steps below while you wait.
-
-**About SSH** (you'll hear this word a lot): *SSH* is the secure way your laptop talks to the
-VM. An **SSH key** is like a matched pair of keys — a private one that stays on your laptop
-and a public one that RCDS installs on the VM — so you can connect without typing a password
-each time. **Ask RCDS to walk you through creating your SSH key and installing it**; it's a
-routine request for them and they'll have you set in a few minutes.
+Start whichever machine request applies to you **today** (it can take days); everything in
+Part A happens on your own laptop while you wait.
 
 ---
 
 ## Also get these accounts/keys (you can do this while you wait)
 
-The radar leans on a few free services. Gather these:
-
-1. **A MindRouter API key.** MindRouter is the University of Idaho's AI gateway — it provides
-   the "smart" parts (understanding paper meaning, writing the summaries) so nothing runs on
-   your own hardware. Request an API **key** for it; ask **RCDS** how to obtain
-   one if it isn't obvious. An *API key* is just a long secret password that lets a program
-   use a service. You'll paste it into a file later.
+1. **Your LLM API key** (see above — OpenAI key, campus gateway key, or your self-hosted
+   server's address).
 
 2. **A Gmail account with an "App Password"** (for *sending* your morning email). It can be a
    personal Gmail or a project one. An **App Password** is a special 16-character password
@@ -111,122 +97,111 @@ The radar leans on a few free services. Gather these:
 ## Part A — set up on your own laptop
 
 You'll do a few steps in the **Terminal**, which is a plain-text way to run commands.
-- **On a Mac:** press `⌘ + Space`, type "Terminal", press Return. A window opens with a prompt.
-- Throughout this guide, a line in a `code box` is something you **type (or paste) and press
-  Return**. Copy them exactly.
+- **On a Mac:** press `⌘ + Space`, type "Terminal", press Return.
+- A line in a `code box` is something you **type (or paste) and press Return**.
 
 ### A1. Make sure you have Python 3.11 or newer
-
-The radar needs **Python** (a programming language that's already on most Macs) version 3.11
-or newer. Check by typing:
 
 ```bash
 python3 --version
 ```
 
 If it says `Python 3.11.x` or higher, you're set. If it's older or missing, install the
-latest from <https://www.python.org/downloads/> (click the big yellow button, run the
-installer), then re-check. *Good news: the radar uses no add-on Python packages, so there's
-nothing else to install.*
+latest from <https://www.python.org/downloads/>, then re-check. *Good news: the radar uses
+no add-on Python packages, so there's nothing else to install.*
 
 ### A2. Get your own copy of the code
 
-This project is a **template** on GitHub, which means GitHub can make you your own personal
-copy with one click.
+This project is a **template** on GitHub, which means GitHub can make you your own copy with
+one click.
 
-1. Go to the template's GitHub page (the person who shared this with you has the link).
+1. Go to the template's GitHub page.
 2. Click the green **"Use this template"** button → **"Create a new repository."**
 3. Give it a name (e.g. `my-paper-radar`), choose **Private**, and create it.
-4. On your new repository's page, click the green **"Code"** button and follow the option to
-   **download** it (or, if you're comfortable, "clone" it). Unzip it somewhere easy to find,
-   like your Desktop.
+4. On your new repository's page, click the green **"Code"** button and download (or clone)
+   it. Unzip it somewhere easy to find.
 
-Now, in Terminal, move into that folder. Type `cd ` (with a space), then **drag the folder
-from Finder onto the Terminal window** (that pastes its path), then press Return:
+All the working files live in the **`app/`** folder, so move into it. In Terminal, type
+`cd ` (with a space), drag the **app folder** from Finder onto the Terminal window, and
+press Return:
 
 ```bash
-cd /path/to/your/my-paper-radar
+cd /path/to/your/my-paper-radar/app
 ```
 
-You're now "inside" the project. Everything below happens here.
+Everything below happens here, inside `app/`.
 
-### A3. List your seed papers
+### A3. List your seed papers (Gathering)
 
-This is the most important step — it defines your taste.
+This defines where the radar looks.
 
 ```bash
 cp seeds.txt.example seeds.txt
 ```
 
-That command (`cp` = copy) makes your own `seeds.txt` from the template. Open `seeds.txt` in
-any text editor (TextEdit is fine) and replace the example lines with **your** papers — one
-per line. Each line can be:
-- a **DOI** (the `10.xxxx/...` identifier printed on most papers), or
-- a **pasted citation** (the radar will look up the DOI for you).
+Open `seeds.txt` in any text editor and replace the example lines with **your** papers — one
+per line, each either a **DOI** (`10.xxxx/...`) or a **pasted citation** (the radar will look
+up the DOI). Aim for **at least 15–20 papers**; more is better. Lines starting with `#` are
+notes and are ignored. Save.
 
-Aim for **at least 15–20 papers** to start; more is better. Lines starting with `#` are notes
-and are ignored, so you can group and label your seeds if you like. Save the file.
+*(Prefer Zotero? See A5 — you can sync seeds from a library instead of typing them.)*
 
-*(Prefer Zotero? See A5 below — you can skip typing seeds and sync them from a library.)*
+### A4. Write your Selection Criteria
 
-### A4. Tell it your email and (optionally) tune your field
+This defines what actually makes the briefing — it's the most powerful file in the project.
 
-Open **`config.toml`** in a text editor. It's plain text with lots of comments. At minimum,
-find the `[contact]` section and change the email:
-
-```toml
-mailto = "you@uidaho.edu"
-```
-
-That address is only used as a polite "who's calling" identifier for the free paper
-databases — it makes them faster and more reliable. While you're in there, you *can* adjust
-the `[briefing] audience` line to describe your field, and edit the journal lists and arXiv
-categories under `[field]` — but you can also **leave all of that for later**; the defaults
-work, and the radar mostly learns from your seeds. Save the file.
-
-### A5. Fill in the three private files (your secrets)
-
-Three settings hold secrets, so they live in their own files that **never** get shared or
-uploaded. Each has a `.example` template — copy it, then fill in your values.
-
-**1. MindRouter (the AI key):**
 ```bash
-cp mindrouter.json.example mindrouter.json
+cp interest_profile.example.json interest_profile.json
 ```
-Open `mindrouter.json` and paste your MindRouter API key between the quotes after
-`"api_key":`. Leave the `base_url` as is.
+
+Open `interest_profile.json`. It ships with a worked example (mine — a political-communication
+profile) showing the format: a core statement of who you are and what you want, a few
+**"flavors"** (your interest areas, each described in 2–3 concrete sentences), a list of
+things you're explicitly *not* interested in, and a few example paper titles you'd love or
+reject. **Rewrite every field in your own words.** Don't overthink the first draft — once
+the dashboard is running you can edit all of this on its *Selection Criteria* page, and each
+edit takes effect the next morning.
+
+Also open **`config.toml`** and set your email in the `[contact]` section (it's only used as
+a polite identifier for the free paper databases). Everything else in there can wait.
+
+### A5. Fill in the private files (your secrets)
+
+Secrets live in their own files that **never** get uploaded (they're in `.gitignore`).
+
+**1. The LLM connection:**
+```bash
+cp llm_api.json.example llm_api.json
+```
+Open `llm_api.json` and fill in your provider's `base_url`, your `api_key`, and the
+`embedding_model` / `chat_model` names. The `.example` file shows an OpenAI-shaped block and
+a campus/self-hosted block. **This is the step your AI coding assistant can do for you** —
+point it at [`app/AGENTS.md`](AGENTS.md) and tell it which provider you have.
 
 **2. Email sending (your Gmail App Password):**
 ```bash
 cp .briefing_env.example .briefing_env
 ```
-Open `.briefing_env` and set your Gmail address, the 16-character App Password (no spaces),
-and where you want the briefing sent (usually your uidaho.edu address).
+Open `.briefing_env` and set your Gmail address, the 16-character App Password, and where
+you want the briefing sent.
 
 **3. (Optional) Zotero:**
 ```bash
 cp zotero.json.example zotero.json
 ```
-Open `zotero.json` and fill in your library ID (and a key if the library is private). Skip
-this file entirely if you're not using Zotero.
-
-> These three files, plus your `seeds.txt`, are automatically kept out of GitHub (they're
-> listed in `.gitignore`). Your secrets stay on your machine.
+Fill in your library ID (and a key if private). Skip entirely if you're not using Zotero.
 
 ### A6. Build your taste profile and do a test run
 
-Now let the radar study your seeds:
+Let the radar study your seeds:
 
 ```bash
 python3 harvest.py --build-profile
 ```
 
-This reads each seed paper, works out your topic areas, and (using MindRouter) builds your
-"taste fingerprint." It prints what it found — your topic clusters and trusted journals.
-
-> **Note:** this step needs to reach MindRouter. On campus or on the VM it just works. From
-> off-campus you may need the university VPN, or simply run this step on the VM later (Part B).
-> If it says embeddings were skipped, that's why — it's not broken.
+This reads each seed paper, works out your topic areas, and builds your "taste fingerprint"
+(this is the first step that talks to your LLM API — if it fails, your `llm_api.json` needs
+attention; ask your AI assistant to debug it against `AGENTS.md`).
 
 Then try a real harvest:
 
@@ -234,152 +209,115 @@ Then try a real harvest:
 python3 harvest.py
 ```
 
-You'll get a `candidates.json` file — the ranked shortlist of today's best papers. If you
-want to see the whole thing end-to-end (write-ups + PDF + email) on your laptop, you can run
-`bash run_daily.sh`, but the tidiest place to run it every day is the VM — that's Part B.
-
-If you're using Zotero, pull your seeds from it any time with:
-```bash
-python3 harvest.py --sync-zotero
-```
+The first run is the slow one (it embeds and judges a two-week backlog — tens of minutes and
+the priciest LLM day you'll have; every later day only pays for what's new). You'll get a
+`candidates.json` — the ranked shortlist of today's best papers, each with the judge's fit
+score and reason. To see the whole thing end-to-end (write-ups + PDF + email) run
+`bash run_daily.sh` — but the tidiest place for the daily routine is the always-on machine:
+Part B.
 
 ---
 
-## Part B — put it on the campus VM (so it runs every morning)
+## Part B — put it on the always-on machine
 
-Once RCDS has given you the VM and your SSH access works, you'll copy the radar onto it and
-let it run itself via **Docker**. *Docker* is a tool that packages the app so it runs the same
-way everywhere; RCDS will have installed it on your VM.
+Once you have your VM and SSH access works, the radar runs itself there via **Docker** (a
+tool that packages the app so it runs the same way everywhere — ask for it to be installed
+when the VM is provisioned).
 
-You'll need two pieces of information from RCDS:
-- the **SSH address** of your VM — it looks like `devops@your-vm.nkn.uidaho.edu`
-- the **folder** on it to use — e.g. `/home/devops/paper-radar` (any folder is fine)
+You need two pieces of information:
+- the **SSH address** of your machine — like `yourname@your-vm.your.edu`
+- the **folder** on it to use — e.g. `/home/yourname/paper-radar`
 
-### B1. Check the VM can reach everything (optional but reassuring)
+### B1. Tell `deploy.sh` where your machine is
 
-From your project folder on your laptop, run the read-only preflight against the VM:
-
-```bash
-ssh devops@your-vm.nkn.uidaho.edu 'bash -s' < vm_recon.sh
-```
-
-(Use your real SSH address.) It checks — and changes nothing — that the VM can reach
-MindRouter, the paper databases, and Gmail. Green "OK" lines are good.
-
-### B2. Tell `deploy.sh` where your VM is
-
-Create a small file named `.deploy_env` in the project folder (it's kept private) with your
-two values:
+Create a small file named `.deploy_env` inside `app/` (it's kept private):
 
 ```bash
-VM=devops@your-vm.nkn.uidaho.edu
-DEST=/home/devops/paper-radar
+VM=yourname@your-vm.your.edu
+DEST=/home/yourname/paper-radar
 ```
 
-### B3. Copy your secrets + seeds onto the VM (once)
+### B2. Copy your secrets + seeds onto the machine (once)
 
-These private files are deliberately **not** sent by the normal deploy, so copy them over by
-hand this one time (`scp` = secure copy):
+These private files are deliberately **not** sent by the normal deploy; copy them by hand
+this one time (`scp` = secure copy):
 
 ```bash
-scp mindrouter.json .briefing_env seeds.txt zotero.json  devops@your-vm.nkn.uidaho.edu:/home/devops/paper-radar/
+scp llm_api.json .briefing_env seeds.txt interest_profile.json zotero.json  yourname@your-vm.your.edu:/home/yourname/paper-radar/
 ```
 
-(Drop `zotero.json` from that line if you're not using Zotero.)
+(Drop `zotero.json` if you're not using it.)
 
-### B4. Deploy, build your profile on the VM, and test
+### B3. Deploy, build your profile there, and test
 
 ```bash
 ./deploy.sh
 ```
 
-This copies the code to the VM and starts the app in Docker. Then build your profile **on the
-VM** (where MindRouter is always reachable) and do one full test run — the commands are
-printed in the `FIRST_TIME_SETUP` notes at the bottom of `deploy.sh`, but here they are:
+This copies the code over and starts the app in Docker. Then build the profile **on the
+machine** and do one full test run:
 
 ```bash
-# build your taste profile on the VM
-ssh devops@your-vm.nkn.uidaho.edu "cd /home/devops/paper-radar && docker compose exec -T briefing python3 harvest.py --build-profile"
+# build your taste profile
+ssh yourname@your-vm.your.edu "cd /home/yourname/paper-radar && docker compose exec -T briefing python3 harvest.py --build-profile"
 
-# do one full morning run right now (writes + emails today's briefing)
-ssh devops@your-vm.nkn.uidaho.edu "cd /home/devops/paper-radar && docker compose exec -T briefing bash -c 'PROJECT_DIR=/app BRIEFING_WRITER=mindrouter bash run_daily.sh'"
+# one full morning run right now (writes + emails today's briefing)
+ssh yourname@your-vm.your.edu "cd /home/yourname/paper-radar && docker compose exec -T briefing bash run_daily.sh"
 ```
 
-If a briefing lands in your inbox, **you're done** — the VM will now run this automatically
-every morning at 05:57 (set in `crontab`; the timezone is set in `docker-compose.yml` — change
-it to `America/Boise` if you like).
+If a briefing lands in your inbox, **you're done** — the machine now runs this automatically
+every morning at 05:57 (set in `crontab`; the timezone is in `docker-compose.yml`).
 
-### B5. Open your dashboard
+### B4. Open your dashboard
 
-Visit the **web address** RCDS pointed at the VM (port 8001) in your browser. You'll see
-today's papers as cards, an Archive, and a Topics page. Click 👍 / 👎 to teach it your taste.
+Visit the web address pointed at your machine's port 8001 (or `http://your-vm:8001`).
+You'll see today's papers as cards with their fit scores, plus four pages: **Today**,
+**Archive**, **Gathering** (the areas being searched, learned from your seeds), and
+**Selection Criteria** (your editable judging page). Click 👍/👎 to teach it; edit the
+Selection Criteria whenever the picks drift.
 
-> **One small security note:** rating papers is protected by a simple password so random bots
-> can't skew your taste model. It's set by `DASH_PASSWORD` in `docker-compose.yml` and ships
-> as `changeme` — change it to something of your own before you deploy. Reading the dashboard
-> stays open to anyone with the link; only the 👍/👎 buttons ask for the password.
+> **One small security note:** anything that changes the model (votes, edits) is protected
+> by a simple password so bots can't skew your radar. It's set by `DASH_PASSWORD` in
+> `docker-compose.yml` and ships as `changeme` — change it before you deploy. Reading stays
+> open to anyone with the link.
 
 ---
 
 ## Living with it, day to day
 
 - **Read your email.** That's the point.
-- **Rate papers** 👍/👎 on the dashboard now and then — it steadily sharpens the picks.
-- **Add new seeds** whenever your interests drift: put new DOIs in `seeds.txt` (or add to your
-  Zotero library), then re-run `--build-profile`. On the VM:
-  ```bash
-  scp seeds.txt devops@your-vm.nkn.uidaho.edu:/home/devops/paper-radar/
-  ssh devops@your-vm.nkn.uidaho.edu "cd /home/devops/paper-radar && docker compose exec -T briefing python3 harvest.py --build-profile"
-  ```
-- **Update the code** later (if you pull improvements): just run `./deploy.sh` again. It never
-  touches your accumulated history or secrets.
-
----
-
-## Tuning it (whenever you feel like it)
-
-Open **`config.toml`** — it's all plain text with explanations. You can widen the search,
-change how many papers you get, add your field's flagship journals, adjust how strict the
-quality/geography filters are, and more. After any change, rebuild the profile
-(`--build-profile`) so it takes effect. Nothing there can break the radar; the worst case is
-you get more or fewer papers than you like, and you dial it back.
-
----
+- **Rate papers** 👍/👎 — recent votes are shown to the judge as examples of your boundary.
+- **Edit your Selection Criteria** on the dashboard when picks feel off — it re-judges
+  everything overnight under your new wording.
+- **Add seeds** when your interests grow: new DOIs in `seeds.txt` (or your Zotero library),
+  then re-run `--build-profile`. If your seeds develop an area your criteria don't cover,
+  the radar notices and proposes a drafted new flavor on the dashboard (and notes it in the
+  briefing) — accept, edit, or dismiss it.
+- **Update the code** later: `./deploy.sh` again. It never touches your history or secrets.
 
 ## If something goes wrong
 
-- **No email arrived.** Check the logs on the VM:
-  `ssh devops@your-vm.nkn.uidaho.edu "docker logs --tail 100 paper-briefing"`. The most common
-  causes are a wrong Gmail App Password or the VM's outbound email being blocked (ask RCDS).
-- **"embeddings unavailable" / summaries look thin.** MindRouter wasn't reachable when the
-  profile was built. Rebuild the profile on the VM (Part B4), where it always is.
-- **The dashboard won't load.** Confirm the container is running
-  (`ssh ... "docker ps"`) and that RCDS's web address points at port 8001.
-- **A `config.toml` error on startup.** You likely deleted a quote or bracket while editing —
-  every `"` and `[` needs its partner. Compare against `config.toml` in a fresh copy.
-- **Still stuck?** The `HANDOFF`-style comments at the top of each script explain what it does,
-  and RCDS can help with anything VM-, SSH-, or network-related.
+- **No email arrived.** Check logs: `ssh ... "docker logs --tail 100 paper-briefing"`. Most
+  common: wrong Gmail App Password, or the machine's outbound email is blocked.
+- **"embeddings unavailable" in the log.** The LLM API wasn't reachable or `llm_api.json`
+  is misconfigured — this is exactly what your AI assistant + `AGENTS.md` are for.
+- **The dashboard won't load.** Confirm the container is running (`ssh ... "docker ps"`)
+  and the web address points at port 8001.
+- **A `config.toml` error.** A quote or bracket got deleted while editing; compare against
+  a fresh copy.
 
 ---
 
 ## Alternative: run it on an always-on Mac (no VM)
 
-If you skip the VM, you can run the radar on a Mac you leave on and awake every morning:
-
 1. Do all of **Part A**.
-2. Two small background jobs keep it running: one to harvest+email each morning, one to serve
-   the dashboard at `http://localhost:8765`. Templates are provided:
+2. Two small background jobs keep it running: one to harvest+email each morning, one to
+   serve the dashboard at `http://localhost:8765`. Templates are provided:
    `com.example.papersradar.plist` (the morning job) and
-   `com.example.papersradar-dashboard.plist` (the dashboard). Open each file — the comments at
-   the top tell you exactly what to edit (your folder's path) and the `launchctl` commands to
-   install them.
-3. Because MindRouter must be reachable when the morning job runs, this Mac should be on
-   campus or on the university VPN. If it's asleep at 05:57, that day's briefing is skipped.
+   `com.example.papersradar-dashboard.plist` (the dashboard). The comments at the top of
+   each tell you what to edit (your folder's path) and the `launchctl` commands to install
+   them.
+3. The LLM API must be reachable when the job runs (for a campus-only gateway that means
+   campus network or VPN). If the Mac is asleep at 05:57, that day's briefing is skipped.
 
-The VM path avoids all of those caveats, which is why it's the recommended one.
-
----
-
-*Questions about the radar itself can go to whoever shared this template with you. Questions
-about the VM, SSH, MindRouter access, or campus networking go to RCDS (`rcds` at `uidaho`
-dot `edu`).*
+The VM path avoids those caveats, which is why it's recommended.

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-dashboard.py — a tiny local web dashboard for the Daily Articles Briefing.
+dashboard.py — a tiny local web dashboard for the Daily Papers Radar.
 
 Runs a localhost-only HTTP server (pure stdlib) so you can, at this Mac:
   - read each day's papers as cards (title, link, abstract, score),
@@ -27,7 +27,7 @@ HOST = os.environ.get("DASH_HOST", "127.0.0.1")
 PORT = int(os.environ.get("DASH_PORT", "8765"))
 # Bot-deterrence gate on model-steering writes (votes + topic weights). Reading is public.
 # Not real security — the password rides in request bodies; matches the stated intent.
-WRITE_PASSWORD = os.environ.get("DASH_PASSWORD", "changeme")
+WRITE_PASSWORD = os.environ.get("DASH_PASSWORD", "papers")
 
 # ----------------------------------------------------------------------------
 # data helpers
@@ -138,7 +138,7 @@ FONTS = ('<link rel="preconnect" href="https://fonts.googleapis.com">'
          '<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,500;8..60,600'
          '&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">')
 
-# "Warm Editorial" design system — the default dashboard aesthetic.
+# "Warm Editorial" design system.
 CSS = """
 :root{--bg:#f6f1e7;--panel:#fffefa;--panel2:#efe8da;--line:#e2d8c6;
  --txt:#2c2620;--muted:#9a8d78;--accent:#a8734d;--teal:#2c2620;
@@ -177,6 +177,9 @@ main{max-width:840px;margin:0 auto;padding:26px 28px}
 .absbox[open] summary:before{content:'▾ '}
 .abs{font-size:12.5px;color:var(--warmbody);margin:8px 0 0}
 .noabs{font-size:11.5px;color:var(--muted);font-style:italic;margin:8px 0 0}
+.alert{background:#fdf3e3;border:1px solid #e6c78a;border-radius:8px;padding:12px 16px;
+ margin:0 0 18px;font-size:13px}
+.alert a{color:var(--accent);font-weight:600;text-decoration:none}
 .topic{font-size:11.5px;text-transform:uppercase;letter-spacing:1.2px;font-weight:700;
  color:var(--muted);margin:28px 0 12px;border-bottom:1px solid var(--line);padding-bottom:6px}
 .votes{margin-top:14px;display:flex;gap:8px;align-items:center}
@@ -257,8 +260,9 @@ function nudge(btn, label, delta){
 def _page(title, body):
     return ("<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
             f"<title>{html.escape(title)}</title>{FONTS}<style>{CSS}</style>"
-            "<header><h1>Daily Articles Briefing</h1>"
-            "<nav><a href='/'>Today</a><a href='/archive'>Archive</a><a href='/topics'>Topics</a></nav>"
+            "<header><h1>Daily Papers Radar</h1>"
+            "<nav><a href='/'>Today</a><a href='/archive'>Archive</a><a href='/topics'>Gathering</a>"
+            "<a href='/profile'>Selection Criteria</a></nav>"
             "<form action='/search'><input type=search name=q placeholder='Search all briefings…'></form>"
             f"</header><main>{body}</main><script>{JS}</script>")
 
@@ -312,8 +316,14 @@ def _card(p, date, fb, topic_no=None):
     sc = p.get("_scores", {})
     meta = " · ".join(x for x in [html.escape(authors), html.escape(p.get("venue") or ""),
                                   html.escape(_display_date(p))] if x)
+    # Chip: the judge's verdict — fit score + the flavor(s) it engages — replacing the
+    # old "Topic N · 0.92" (2026-07-24 request). Pre-judge papers keep the old chip.
     chip = ""
-    if sc:
+    if p.get("judge_fit") is not None:
+        flav = ", ".join(f.replace("_", " ") for f in (p.get("judge_flavors") or []))
+        chip = (f"<span class=score>{p['judge_fit']:g}/10"
+                f"{' · ' + html.escape(flav) if flav else ''}</span>")
+    elif sc:
         tpart = f"Topic {topic_no} · " if topic_no else ""
         chip = f"<span class=score>{tpart}{p.get('score', 0):.2f}</span>"
     score = chip
@@ -368,13 +378,34 @@ def render_day(date):
              f"{html.escape(topic)}</div>" if topic else "")
             + "".join(_card(p, date, fb, _topic_no(topic, order)) for p in ps)
             for topic, ps in sorted(groups.items(), key=lambda kv: -len(kv[1])))
-    foot = ("<div class=foot>ℹ️ <b>Score</b> is the paper's overall ranking value, roughly 0–1: "
-            "50% topical alignment with your seed papers (semantic match to your interests), "
-            "35% venue quality (your trusted journals, prestige outlets, and measured citation "
-            "impact), 15% recency — minus penalties for non-journal formats and non-US/European "
-            "author bases. On a typical day, ~0.6+ is a strong match. <b>Topic N</b> is the "
-            "interest area the paper sits closest to — see the <a href='/topics'>Topics</a> page.</div>")
-    return _page(f"Briefing {date}", f"<div class=sub>{nice}</div>{cards}{foot}")
+    foot = ("<div class=foot>ℹ️ The chip on each card is the <b>judge's verdict</b>: an LLM "
+            "reads every shortlisted abstract against your <a href='/profile'>interest "
+            "profile</a>, scores fit 0–10, and names the flavor(s) the paper engages. "
+            "Final ranking = 73% that relevance, 27% venue quality (your trusted journals, "
+            "prestige outlets, measured citation impact), minus penalties for non-journal "
+            "formats and non-US/European author bases. Freshness is enforced by the 14-day "
+            "harvest window rather than scored.</div>")
+    # Downvote-cluster alert: harvest writes alerts.json when several recent 👎 land
+    # nearest the same flavor — a nudge that the profile wording needs an exclusion.
+    banner = ""
+    try:
+        a = json.loads((HERE / "alerts.json").read_text())
+        if a.get("date", "") >= (dt.date.today() - dt.timedelta(days=7)).isoformat():
+            banner = (f"<div class=alert>⚠️ {html.escape(a.get('suggestion', ''))} "
+                      f"<a href='/profile'>Edit selection criteria →</a></div>")
+    except Exception:
+        pass
+    try:
+        props = json.loads((HERE / "proposals.json").read_text())
+        npend = sum(1 for p in props.values() if p.get("status") == "pending")
+        if npend:
+            banner += (f"<div class=alert>💡 Your seed papers include {npend} research "
+                       f"area{'s' if npend > 1 else ''} your Selection Criteria don't cover "
+                       f"yet — a drafted flavor is ready to review. "
+                       f"<a href='/profile'>Review proposal →</a></div>")
+    except Exception:
+        pass
+    return _page(f"Briefing {date}", f"<div class=sub>{nice}</div>{banner}{cards}{foot}")
 
 def render_archive():
     """Past editions grouped under a collapsible toggle per month (newest first,
@@ -438,11 +469,13 @@ def render_topics():
             if t:
                 best.setdefault(t, []).append((p.get("score", 0), d, p))
     if not interests:
-        return _page("Topics", "<p class=empty>No interest profile yet — run "
-                               "<code>python3 harvest.py --build-profile</code> on the VPN.</p>")
-    blocks = ["<div class=sub>The interest areas the model has deduced from your seed papers. "
-              "Use +/− to gently raise or lower a topic's priority in the daily ranking "
-              "(each click ±0.05, capped ×0.75–×1.30).</div>"]
+        return _page("Gathering", "<p class=empty>No profile yet — run "
+                                  "<code>python3 harvest.py --build-profile</code> with your LLM API configured.</p>")
+    blocks = ["<div class=sub><b>Gathering — stage 1 of 2:</b> the research areas searched "
+              "each morning, learned automatically from your seed papers. This casts the "
+              "wide net; the <a href='/profile'>Selection Criteria</a> decide what makes "
+              "the briefing. Use +/− to gently raise or lower an area's priority in the "
+              "daily ranking (each click ±0.05, capped ×0.75–×1.30).</div>"]
     interests = sorted(interests, key=lambda i: -sizes.get(i["label"], 0))[:10]
     for ti, it in enumerate(interests, 1):
         label = it["label"]
@@ -466,7 +499,7 @@ def render_topics():
             f"<span class=wval>×{w:.2f}</span>"
             f"<button class=wbtn onclick=\"nudge(this,'{esc}',0.05)\">+</button></span></div>"
             f"<div class=tp-desc>{html.escape(it.get('statement') or '')}</div>{rows}</div>")
-    return _page("Topics", "".join(blocks))
+    return _page("Gathering", "".join(blocks))
 
 def render_search(q):
     q = (q or "").strip()
@@ -488,6 +521,125 @@ def render_search(q):
 # server
 # ----------------------------------------------------------------------------
 
+PROFILE_F = HERE / "interest_profile.json"
+
+def render_profile():
+    """The interest-profile editor: the plain-English description of what the user wants,
+    read verbatim by the LLM judge. Editable here so tuning = editing a paragraph.
+    Saving bumps the version (date + content hash), which invalidates the judge's
+    verdict cache so the next nightly run re-judges under the new wording."""
+    if not PROFILE_F.exists():
+        return _page("Selection Criteria", "<p>No interest_profile.json yet.</p>")
+    try:
+        prof = json.loads(PROFILE_F.read_text())
+    except Exception as e:
+        return _page("Selection Criteria", f"<p>Could not read interest_profile.json: {html.escape(str(e))}</p>")
+
+    def ta(name, value, rows=4):
+        return (f"<textarea name='{name}' rows={rows} style='width:100%;font:inherit;"
+                f"padding:.5em'>{html.escape(value or '')}</textarea>")
+
+    flavors = ""
+    for i, f in enumerate(prof.get("flavors", [])):
+        flavors += (f"<div class='flavor' style='margin:.8em 0;padding:.6em;border:1px solid #ddd;border-radius:8px'>"
+                    f"<input name='fkey{i}' value='{html.escape(f.get('key',''))}' "
+                    f"style='font:inherit;font-weight:600;width:60%;padding:.3em'> "
+                    f"<label style='font-size:.85em'><input type=checkbox name='fdel{i}'> remove</label>"
+                    f"{ta(f'fdesc{i}', f.get('description',''), 3)}</div>")
+    negs = "\n".join(prof.get("negatives", []))
+    pos_ex = "\n".join(prof.get("positive_exemplar_titles", []))
+    neg_ex = "\n".join(prof.get("negative_exemplar_titles", []))
+    n = len(prof.get("flavors", []))
+    # Pending flavor proposals from the Gathering<->Selection coverage audit (judge.py):
+    # a seed cluster no flavor covers, with an LLM-drafted flavor ready to review.
+    # Accept = prefill the "add a new flavor" fields (you still review + Save);
+    # Dismiss = remembered in proposals.json so it stops nagging.
+    proposals_html = ""
+    try:
+        props = json.loads((HERE / "proposals.json").read_text())
+        pend = [p for p in props.values() if p.get("status") == "pending"]
+    except Exception:
+        pend = []
+    for p in pend:
+        fl = p.get("flavor") or {}
+        ts = "".join(f"<li>{html.escape(t)}</li>" for t in p.get("titles", [])[:5])
+        proposals_html += f"""
+<div class=alert><b>💡 Proposed new flavor.</b> Your seed papers include a cluster
+("{html.escape(p.get('cluster', '?'))}", {p.get('size', '?')} papers) that no Selection flavor covers —
+the judge is likely vetoing this area. Drafted from those papers:
+<div style='margin:.6em 0'><b>{html.escape(fl.get('key', '(no draft)'))}</b>: {html.escape(fl.get('description', ''))}</div>
+<details style='margin:.4em 0'><summary>sample seed papers</summary><ul>{ts}</ul></details>
+<button type=button onclick='acceptProposal({json.dumps(fl.get("key", ""))}, {json.dumps(fl.get("description", ""))})'>Accept → prefill below</button>
+<button type=button onclick='dismissProposal({json.dumps(p.get("cluster", ""))}, this)'>Dismiss</button>
+<span class=pmsg></span></div>"""
+
+    body = f"""
+<h2>Selection criteria <small style='font-weight:400;color:#888'>(version {html.escape(str(prof.get('version','?')))})</small></h2>
+<div class=sub><b>Selection — stage 2 of 2:</b> your criteria, in plain English. An LLM judge
+reads every gathered-and-shortlisted paper against this page and scores its fit 0–10; that
+score decides what makes the briefing. (Stage 1, <a href='/topics'>Gathering</a>, casts the net.)</div>
+<p style='max-width:60em'>Edit freely — looser prose is fine; specifics and "not X" exclusions help most. Saving bumps the
+version, and the next nightly run re-scores everything under the new wording (a few extra minutes, no other cost).</p>
+{proposals_html}
+<form id=pf>
+<h3>Who I am / what I want (core statement)</h3>{ta('core_statement', prof.get('core_statement',''), 5)}
+<h3>Interest flavors</h3>
+<p style='color:#666;font-size:.9em'>Each flavor is one coherent area or intersection, in your own words.
+A paper squarely inside any ONE flavor is treated as a bullseye.</p>
+{flavors}
+<p><label><input type=checkbox name=fadd> add a new flavor:</label>
+<input name='fkeyNEW' placeholder='short_key' style='font:inherit;padding:.3em'>
+{ta('fdescNEW', '', 2)}</p>
+<h3>Fit rule (how to score)</h3>{ta('fit_rule', prof.get('fit_rule',''), 4)}
+<h3>Explicitly NOT of interest (one per line)</h3>{ta('negatives', negs, 6)}
+<h3>Example papers I liked (one title per line)</h3>{ta('pos_ex', pos_ex, 5)}
+<h3>Example papers I rejected or downgraded (one title per line)</h3>{ta('neg_ex', neg_ex, 5)}
+<p><input name=pw type=password placeholder='edit password' style='font:inherit;padding:.4em'>
+<button type=submit style='font:inherit;padding:.4em 1.2em'>Save</button>
+<span id=pfmsg style='margin-left:1em'></span></p>
+</form>
+<script>
+document.getElementById('pf').addEventListener('submit', async (e) => {{
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const flavors = [];
+  for (let i = 0; i < {n}; i++) {{
+    if (fd.get('fdel'+i)) continue;
+    const k = (fd.get('fkey'+i)||'').trim(), d = (fd.get('fdesc'+i)||'').trim();
+    if (k && d) flavors.push({{key: k, description: d}});
+  }}
+  if (fd.get('fadd') && (fd.get('fkeyNEW')||'').trim() && (fd.get('fdescNEW')||'').trim())
+    flavors.push({{key: fd.get('fkeyNEW').trim(), description: fd.get('fdescNEW').trim()}});
+  const lines = s => (s||'').split('\\n').map(x=>x.trim()).filter(Boolean);
+  const body = {{password: fd.get('pw'), core_statement: fd.get('core_statement'),
+    flavors, fit_rule: fd.get('fit_rule'), negatives: lines(fd.get('negatives')),
+    positive_exemplar_titles: lines(fd.get('pos_ex')),
+    negative_exemplar_titles: lines(fd.get('neg_ex'))}};
+  const r = await fetch('/profile', {{method:'POST', body: JSON.stringify(body)}});
+  const j = await r.json();
+  document.getElementById('pfmsg').textContent =
+    j.ok ? ('Saved — new version ' + j.version) : ('Error: ' + (j.error||'?'));
+}});
+function acceptProposal(key, desc) {{
+  const f = document.getElementById('pf');
+  f.elements['fadd'].checked = true;
+  f.elements['fkeyNEW'].value = key;
+  f.elements['fdescNEW'].value = desc;
+  f.elements['fdescNEW'].scrollIntoView({{behavior:'smooth', block:'center'}});
+}}
+async function dismissProposal(cluster, btn) {{
+  const pw = document.getElementById('pf').elements['pw'].value;
+  const r = await fetch('/proposal', {{method:'POST',
+    body: JSON.stringify({{password: pw, cluster, action:'dismiss'}})}});
+  const j = await r.json();
+  btn.parentElement.querySelector('.pmsg').textContent =
+    j.ok ? 'Dismissed.' : ('Error: ' + (j.error||'enter the edit password below first'));
+  if (j.ok) btn.parentElement.style.opacity = 0.45;
+}}
+</script>"""
+    return _page("Selection Criteria", body)
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send(self, body, ctype="text/html; charset=utf-8", code=200):
         data = body.encode() if isinstance(body, str) else body
@@ -500,6 +652,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/" or path == "":
             days = _days()
             self._send(render_day(days[0]) if days else render_day(dt.date.today().isoformat()))
+        elif path == "/profile":
+            self._send(render_profile())
         elif path.startswith("/day/"):
             self._send(render_day(path.split("/day/", 1)[1]))
         elif path == "/archive":
@@ -518,12 +672,52 @@ class Handler(BaseHTTPRequestHandler):
             req = json.loads(self.rfile.read(n) or b"{}")
         except Exception:
             req = {}
-        # Both write endpoints steer the model — gate them on the shared password.
-        if p in ("/topic_weight", "/vote"):
+        # All write endpoints steer the model — gate them on the shared password.
+        if p in ("/topic_weight", "/vote", "/profile", "/proposal"):
             supplied = req.get("password") or self.headers.get("X-Auth", "")
             if supplied != WRITE_PASSWORD:
                 return self._send(json.dumps({"ok": False, "error": "auth"}),
                                   "application/json", 401)
+        if p == "/proposal":
+            # Dismiss a coverage-audit flavor proposal (remembered so it stops nagging).
+            pf = HERE / "proposals.json"
+            try:
+                props = json.loads(pf.read_text()) if pf.exists() else {}
+            except Exception:
+                props = {}
+            cl = (req.get("cluster") or "").strip()
+            if req.get("action") == "dismiss" and cl in props:
+                props[cl]["status"] = "dismissed"
+                pf.write_text(json.dumps(props, indent=2, ensure_ascii=False))
+                return self._send(json.dumps({"ok": True}), "application/json")
+            return self._send(json.dumps({"ok": False, "error": "unknown proposal"}),
+                              "application/json", 400)
+        if p == "/profile":
+            # Merge the edited fields into interest_profile.json, preserving anything the
+            # form doesn't cover (facets, _note). Version = date + content hash, so the
+            # judge's verdict cache (keyed by version) invalidates itself on any edit.
+            import hashlib
+            try:
+                prof = json.loads(PROFILE_F.read_text()) if PROFILE_F.exists() else {}
+            except Exception:
+                prof = {}
+            for fld in ("core_statement", "flavors", "fit_rule", "negatives",
+                        "positive_exemplar_titles", "negative_exemplar_titles"):
+                if fld in req:
+                    prof[fld] = req[fld]
+            if not prof.get("core_statement") or not prof.get("flavors"):
+                return self._send(json.dumps({"ok": False, "error": "core statement and at "
+                                              "least one flavor are required"}),
+                                  "application/json", 400)
+            content = json.dumps({k: v for k, v in prof.items() if k != "version"},
+                                 sort_keys=True, ensure_ascii=False)
+            prof["version"] = (dt.date.today().isoformat() + "-"
+                               + hashlib.sha1(content.encode()).hexdigest()[:6])
+            tmp = PROFILE_F.with_suffix(".tmp")
+            tmp.write_text(json.dumps(prof, indent=2, ensure_ascii=False))
+            tmp.replace(PROFILE_F)
+            return self._send(json.dumps({"ok": True, "version": prof["version"]}),
+                              "application/json")
         if p == "/topic_weight":
             # gentle ± nudges to a topic's priority; clamped so it can't overcorrect
             wf = HERE / "topic_weights.json"
@@ -567,7 +761,7 @@ def main():
         print(f"built briefings/data_{sys.argv[2]}.json with {n} paper(s)")
         return
     srv = ThreadingHTTPServer((HOST, PORT), Handler)
-    print(f"Daily Articles Briefing dashboard → http://{HOST}:{PORT}  (Ctrl-C to stop)")
+    print(f"Daily Papers Radar dashboard → http://{HOST}:{PORT}  (Ctrl-C to stop)")
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
